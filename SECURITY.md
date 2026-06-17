@@ -54,6 +54,21 @@ Secrets never go into the chat and never get committed.
 Before its first push, the studio also sanity-checks that nothing under `.secrets/` or
 `CREDENTIALS.txt` is staged.
 
+## The bundled Playwright MCP (browser automation)
+
+So Claude can verify how pages render, the kit ships the **Playwright MCP** — declared in the
+project `.mcp.json` and **pre-approved** via `enabledMcpjsonServers` in `.claude/settings.json`,
+so it's available without an approval prompt. What that means:
+
+- On use, Claude Code runs `npx @playwright/mcp@latest`, which launches a (headless) Chromium
+  browser the agent can navigate and screenshot. The browser engine is installed by the
+  installer (Playwright's own Chromium, not your system Chrome).
+- It's pre-approved **only** for the server named `playwright` from this kit's `.mcp.json` (via
+  the precise `enabledMcpjsonServers` list — not a blanket "approve everything"). Any other MCP
+  server you add later still goes through normal approval.
+- If you'd rather it not be auto-approved, remove `"enabledMcpjsonServers"` from
+  `.claude/settings.json` (you'll then get a one-time approval prompt), or delete `.mcp.json`.
+
 ## The backup is yours
 
 The optional cloud backup pushes to a **private GitHub repo on your own account** (connected

@@ -18,16 +18,19 @@ curl -fsSL https://get.daylightcreative.tech/wp-studio | bash
 The installer is a guided wizard. It will:
 
 1. Install the prerequisites — Xcode Command Line Tools, Homebrew, a **modern Python** (not
-   macOS's old, locked-down system one), and the WordPress tooling (`wp-cli`, ImageMagick,
-   MySQL client, `gh`).
+   macOS's old, locked-down system one), **Node**, and the WordPress tooling (`wp-cli`,
+   ImageMagick, MySQL client, `gh`).
 2. Install the latest **Claude Code** (the native installer, which keeps itself up to date).
-3. Lay down the studio — a searchable knowledge library, helper scripts, and the working
+3. Set up **browser-based visual verification** — the **Playwright MCP**, enabled by default,
+   plus a Chromium engine, so Claude can view/snapshot/screenshot your pages (desktop + mobile)
+   right away.
+4. Lay down the studio — a searchable knowledge library, helper scripts, and the working
    standards — in a folder you choose (default `~/claude-wp-studio`).
-4. Write the Claude Code defaults: **xhigh reasoning effort**, the **opus** model, and a
+5. Write the Claude Code defaults: **xhigh reasoning effort**, the **opus** model, and a
    launcher that runs with **full autonomy** (bypass permissions) so Claude isn't stopped on
    every step.
-5. Optionally connect a **private GitHub backup** on your own account.
-6. Hand off to Claude's login so you connect your subscription or API key.
+6. Optionally connect a **private GitHub backup** on your own account.
+7. Hand off to Claude's login so you connect your subscription or API key.
 
 > **Unattended / agent-driven install:** add `--unattended` (and optionally `--dir <path>`,
 > `--no-backup`). Designed so another agent can run it headlessly.

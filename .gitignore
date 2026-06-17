@@ -14,6 +14,10 @@ projects/**/backups/
 # Generated search index (rebuilds from markdown)
 library/catalog.db
 
+# Playwright MCP output (screenshots, traces, sessions)
+.playwright-mcp/
+.playwright/
+
 # Python cache
 __pycache__/
 *.pyc

@@ -140,6 +140,10 @@ sibling folders.
   work (`tooling/templates/wp.sh`). Use the GUI mainly to verify visually.
 - **Custom CSS lives in an mu-plugin or theme stylesheet**, never the Customizer's "Additional
   CSS" (unreliable, and Divi suppresses it). See the lessons.
+- **Verify visually with the browser.** The **Playwright MCP** ships enabled — use it to load a
+  page and take a snapshot/screenshot to confirm how a change *actually* renders (desktop and
+  mobile), rather than assuming. "Works in my browser" is usually stale cache, so check the real
+  rendered page after purging cache. Default is headless; you see via screenshots/snapshots.
 
 ## The knowledge practice (what makes you better over time)
 

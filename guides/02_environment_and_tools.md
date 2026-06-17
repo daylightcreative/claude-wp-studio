@@ -76,9 +76,18 @@ on their Mac), explain it plainly and ask them for the one thing you need.
 Don't block activation on the WordPress/image tools — install those when the first client task
 needs them.
 
-## A note on browsers (optional, very useful later)
+## Browser-based visual verification (Playwright MCP — ships enabled)
 
-For verifying how pages actually render (desktop + mobile) and catching JavaScript/runtime
-issues, a real browser via Playwright is invaluable — "works in my browser" is often just
-[stale cache](../library/lessons/caching_by_host.md). It's not needed for activation; set it
-up when you first need visual verification on a client site.
+The studio ships with the **Playwright MCP enabled by default** — declared in the project
+`.mcp.json` and pre-approved via `enabledMcpjsonServers` in `.claude/settings.json` — so you
+can **view how a page actually renders**: load a URL, take an accessibility snapshot and a
+screenshot, and check desktop *and* mobile widths. This matters because "works in my browser"
+is often just [stale cache](../library/lessons/caching_by_host.md), and the only honest way to
+confirm a visual change is to look at the rendered page (always after purging cache).
+
+- The installer provisions **Node** and the **Chromium** browser engine, so the MCP works on
+  first use without a download stall.
+- It runs **headless** (`--headless --browser=chromium`) — you "see" the page via snapshots and
+  screenshots. To watch a live window instead, remove `--headless` from `.mcp.json`.
+- If the browser engine is ever missing, install it yourself: `npx playwright install chromium`.
+- Confirm the server is wired up with `claude mcp list` (should show `playwright … Connected`).

@@ -54,6 +54,9 @@ copy. If you're ever unsure: *"Is this live or a practice copy?"*
   configure anything.
 - **Keeping things updated and tidy.** It quietly keeps the software current and the workspace
   clean in the background.
+- **Viewing your site in a real browser.** Claude can open your pages, take pictures, and check
+  how they look on both desktop and a phone — so it can show you a change actually rendered,
+  not just describe it. (Just ask: *"show me what the homepage looks like on mobile."*)
 - **Saving your work.** Claude automatically saves your work as you go (and backs it up to your
   private cloud copy if you connected one during setup). You don't have to save or manage any
   of that — it just happens.

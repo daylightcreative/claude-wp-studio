@@ -1,6 +1,7 @@
 {
   "model": "opus",
   "effortLevel": "xhigh",
+  "enabledMcpjsonServers": ["playwright"],
   "hooks": {
     "SessionEnd": [
       {

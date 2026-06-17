@@ -126,7 +126,7 @@ fi
 
 # ─── 5. WordPress + dev tooling ──────────────────────────────────────────────
 step "WordPress + dev tooling"
-for f in wp-cli imagemagick mysql-client gh rsync git; do
+for f in wp-cli imagemagick mysql-client gh rsync git node; do
   if brew list "$f" >/dev/null 2>&1; then
     ok "$f"
   else
@@ -134,6 +134,19 @@ for f in wp-cli imagemagick mysql-client gh rsync git; do
     brew install "$f" >>"$LOG" 2>&1 && ok "$f" || warn "$f install reported an issue (see $LOG)"
   fi
 done
+
+# ─── 5b. Browser engine for visual verification (Playwright MCP) ─────────────
+# The studio ships a project .mcp.json + an enabledMcpjsonServers pre-approval so Claude can
+# view/snapshot/screenshot sites in a real browser by default. Provision the browser now so
+# the MCP works on first use without a download stall.
+step "Browser engine (Playwright)"
+if command -v npx >/dev/null 2>&1; then
+  say "  downloading the Chromium browser Claude uses to view pages (~150 MB, one time)…"
+  npx -y playwright install chromium >>"$LOG" 2>&1 && ok "Chromium installed" || warn "Playwright browser install hit an issue (see $LOG) — Claude can retry on first use"
+  npx -y @playwright/mcp@latest --version >>"$LOG" 2>&1 && ok "Playwright MCP ready (npm cached)" || warn "Playwright MCP warm-up hit an issue (see $LOG)"
+else
+  warn "node/npx not found — skipping browser setup; it'll be set up on first use"
+fi
 
 # ─── 6. Claude Code (latest; native installer auto-updates) ───────────────────
 step "Claude Code"
