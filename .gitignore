@@ -1,0 +1,22 @@
+# Secrets — never commit
+.secrets/
+projects/**/.secrets/
+CREDENTIALS.txt
+
+# Local Claude Code overrides (user-specific)
+.claude/settings.local.json
+
+# Backups and database dumps
+projects/**/backups/
+*.sql
+*.sql.gz
+
+# Generated search index (rebuilds from markdown)
+library/catalog.db
+
+# Python cache
+__pycache__/
+*.pyc
+
+# macOS cruft
+.DS_Store
