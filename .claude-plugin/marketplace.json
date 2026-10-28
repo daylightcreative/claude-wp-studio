@@ -1,0 +1,12 @@
+{
+  "name": "daylight",
+  "description": "Claude Code plugins from DayLight Creative Technologies",
+  "owner": { "name": "DayLight Creative Technologies", "url": "https://daylightcreative.tech" },
+  "plugins": [
+    {
+      "name": "wp-studio",
+      "source": "./plugin",
+      "description": "Build and maintain WordPress sites by conversation, safely."
+    }
+  ]
+}

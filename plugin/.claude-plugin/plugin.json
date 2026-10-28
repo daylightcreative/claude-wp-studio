@@ -1,0 +1,11 @@
+{
+  "name": "wp-studio",
+  "displayName": "Claude WP Studio",
+  "version": "2.0.0",
+  "description": "Build and maintain WordPress sites by conversation: a safe site tool (wpsite), enforced backup and deploy rules, and WordPress skills learned on real client sites.",
+  "author": { "name": "DayLight Creative Technologies", "url": "https://daylightcreative.tech" },
+  "homepage": "https://daylightcreative.tech/wp-studio",
+  "repository": "https://github.com/daylightcreative/claude-wp-studio",
+  "license": "MIT",
+  "keywords": ["wordpress", "wp-cli", "divi", "gutenberg", "agency"]
+}
