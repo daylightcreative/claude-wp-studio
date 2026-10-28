@@ -21,8 +21,6 @@ import sys
 import tarfile
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -220,16 +218,38 @@ def guard_required() -> Sequence[str]:
     return REQUIRED_FOR_SSH
 
 
+def http_get(url: str, timeout: int = 20) -> Tuple[Optional[int], Dict[str, str], str]:
+    """GET a URL with the Mac's curl: (status, lower-cased headers, first 64 KB of the body).
+
+    Not Python's urllib: the Python that ships with Apple's Command Line Tools links LibreSSL 2.8,
+    which fails the TLS handshake with common CDNs ("tlsv1 alert protocol version"), and that is the
+    Python the studio runs on. curl uses the system TLS stack and works.
+    """
+    with tempfile.NamedTemporaryFile() as body_file:
+        proc = subprocess.run(
+            [os.environ.get("WPSTUDIO_CURL", "curl"), "-sS", "-m", str(timeout), "-A", "Mozilla/5.0 (wp-studio)",
+             "-D", "-", "-o", body_file.name, url],
+            capture_output=True, text=True)
+        if proc.returncode != 0:
+            return None, {"error": proc.stderr.strip()[:200]}, ""
+        body = body_file.read(65536).decode("utf-8", "replace")
+    status, headers = None, {}
+    for line in proc.stdout.splitlines():
+        if line.startswith("HTTP/"):
+            parts = line.split()
+            status = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+            headers = {}
+        elif ":" in line:
+            key, _, value = line.partition(":")
+            headers[key.strip().lower()] = value.strip()
+    return status, headers, body
+
+
 def _probe_http(url: str) -> Tuple[Optional[int], Dict[str, str]]:
-    request = urllib.request.Request(url + ("&" if "?" in url else "?") + "wpstudio-cb=%d" % time.time(),
-                                     headers={"User-Agent": "Mozilla/5.0 (wp-studio check)"}, method="GET")
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            return response.status, {k.lower(): v for k, v in response.headers.items()}
-    except urllib.error.HTTPError as err:
-        return err.code, {k.lower(): v for k, v in err.headers.items()}
-    except (urllib.error.URLError, OSError, ValueError):
+    if not url:
         return None, {}
+    status, headers, _ = http_get(url + ("&" if "?" in url else "?") + "wpstudio-cb=%d" % time.time(), timeout=15)
+    return status, headers
 
 
 CHECK_SCRIPT = r"""
@@ -536,12 +556,9 @@ def reset_opcache(site: Site) -> str:
         _, out, _ = remote.run_text(site, "wp option get home")
         base = out.strip()
     try:
-        request = urllib.request.Request("%s/%s" % (base.rstrip("/"), name),
-                                         headers={"User-Agent": "Mozilla/5.0 (wp-studio deploy)"})
-        with urllib.request.urlopen(request, timeout=20) as response:
-            body = response.read(200).decode("utf-8", "replace")
-    except (urllib.error.URLError, OSError, ValueError) as err:
-        body = "request failed (%s)" % getattr(err, "reason", err)
+        status, headers, body = http_get("%s/%s" % (base.rstrip("/"), name))
+        if status is None:
+            body = "request failed (%s)" % headers.get("error", "no answer")
     finally:
         remote.run(site, "rm -f %s" % shlex.quote(name))
     if "wpstudio-opcache:reset" in body:

@@ -46,6 +46,9 @@ are enforced by tools instead of written down as instructions.
   - `claude` is added to the PATH of new Terminal windows;
   - it no longer installs tools the studio doesn't use on the Mac (WP-CLI, mysql-client).
 - **Password-only hosts:** these work, through SSH_ASKPASS; `wpsite key` sets up key login.
+- **Requests to the website go through `curl`.** The Python that ships with Apple's Command Line Tools
+  (LibreSSL 2.8) fails the TLS handshake with common CDNs, which silently broke the opcache reset after a
+  deploy on a real Kinsta site.
 
 **Knowledge**
 - **Fifteen skills** replace the v1 library and its search catalog, rewritten from four more months

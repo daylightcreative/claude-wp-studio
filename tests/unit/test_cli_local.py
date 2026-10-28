@@ -217,3 +217,27 @@ def test_the_studio_ssh_key_cannot_be_deployed(studio, fake_ssh, monkeypatch, tm
     key.write_text("PRIVATE")
     result = wpsite("deploy", "acme", str(key), "wp-content/uploads/k.txt")
     assert result.returncode == 3
+
+
+def test_http_get_uses_curl_and_reads_status_headers_and_body(tmp_path):
+    """Web requests go through curl: Apple's Python can't handshake with common CDNs."""
+    import http.server
+    import threading
+    sys.path.insert(0, str(PLUGIN / "lib"))
+    from wpstudio.cli import http_get
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(418)
+            self.send_header("X-Cache", "HIT")
+            self.end_headers()
+            self.wfile.write(b"wpstudio-opcache:reset")
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.handle_request, daemon=True).start()
+    status, headers, body = http_get("http://127.0.0.1:%d/x" % server.server_port)
+    assert (status, headers["x-cache"], body) == (418, "HIT", "wpstudio-opcache:reset")
+    assert http_get("http://127.0.0.1:9/unreachable", timeout=2)[0] is None
