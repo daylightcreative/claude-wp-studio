@@ -80,6 +80,15 @@ def log_activity(site: Site, command: str) -> None:
         handle.write("%s\t%s\t%s\n" % (dt.datetime.now().isoformat(timespec="seconds"), site.env, line))
 
 
+def refuse_secret_path(root: Path, path: Path, what: str) -> None:
+    """Never let a wpsite command read or write a secret: the drop box or the secrets store."""
+    resolved = path.expanduser().resolve()
+    store = workspace.secrets_home().resolve()
+    box = workspace.dropbox_path(root).resolve()
+    if resolved == box or resolved == store or store in resolved.parents or resolved.name.lower() == "credentials.txt":
+        raise Refused("Refused: %s would read or write the credential drop box or the secrets store." % what)
+
+
 def require_fresh_backup(site: Site, what: str) -> None:
     found = guard.latest_backup(site.backups)
     if found is not None and found[1] <= guard.BACKUP_MAX_AGE:
@@ -131,7 +140,6 @@ def cmd_init(args, root: Path) -> int:
         raise SiteError("projects/%s already exists." % slug)
     for sub in ("backups", "work"):
         (project / sub).mkdir(parents=True, exist_ok=True)
-    (project / ".secrets").mkdir(mode=0o700)
     fill = {"slug": slug, "url": url, "date": dt.date.today().isoformat()}
     templates = PLUGIN_ROOT / "skills" / "new-site"
     (project / "CLAUDE.md").write_text(_fill(templates / "project-CLAUDE.md", fill), encoding="utf-8")
@@ -139,7 +147,7 @@ def cmd_init(args, root: Path) -> int:
     client_doc.parent.mkdir(exist_ok=True)
     if not client_doc.exists():
         client_doc.write_text(_fill(templates / "client.md", fill), encoding="utf-8")
-    envfile.write(project / ".secrets" / "live.env", {"SITE_URL": url},
+    envfile.write(Site(slug=slug, env="live", root=root).env_file, {"SITE_URL": url},
                   header="Connection details for %s (live). Filed by wpsite; never commit or paste this file." % slug)
     say("Created projects/%s and clients/%s.md." % (slug, slug))
     say("Next: ask the operator to fill in CREDENTIALS.txt, then run: wpsite secrets file %s" % slug)
@@ -248,6 +256,7 @@ def _remote_facts(site: Site) -> Dict[str, List[str]]:
 
 def cmd_check(args, root: Path) -> int:
     site = resolve(args.site, root)
+    remote.server_secrets(site, refresh=True)
     facts = _remote_facts(site)
     first = lambda k: (facts.get(k) or [""])[0]
     if not first("wp_version"):
@@ -324,6 +333,7 @@ def _run_with_input(site: Site, command: str, input_path: Optional[str]):
     if not input_path:
         return remote.run_text(site, command)
     source = Path(input_path).expanduser()
+    refuse_secret_path(site.root, source, "--input %s" % input_path)
     if not source.is_file():
         raise SiteError("--input file %s doesn't exist." % input_path)
     with open(source, "rb") as handle:
@@ -539,7 +549,13 @@ def cmd_deploy(args, root: Path) -> int:
     source = Path(args.local).expanduser().resolve()
     if not source.exists():
         raise SiteError("%s doesn't exist." % args.local)
+    refuse_secret_path(root, source, "deploying %s" % args.local)
+    if source.is_dir():
+        store = workspace.secrets_home().resolve()
+        if source == store or source in store.parents or (source / workspace.DROPBOX).exists():
+            raise Refused("Refused: that folder holds the studio's secrets; deploy the specific folder you mean.")
     dest = clean_remote_path(args.remote)
+    require_fresh_backup(site, "deploying to %s" % (dest or "the WordPress folder"))
     is_dir = source.is_dir()
     if is_dir and dest in PROTECTED_DIRS:
         raise Refused("Refused: deploying a folder replaces the whole destination, and %r holds things that aren't "
@@ -645,23 +661,36 @@ def cmd_deploy(args, root: Path) -> int:
     return 0
 
 
+def extract_inside(archive: Path, target: Path) -> List[str]:
+    """Unpack only plain files and folders, and only inside `target` (no ../ paths, no links).
+    Returns the names it skipped."""
+    target.mkdir(parents=True, exist_ok=True)
+    inside = target.resolve()
+    skipped = []
+    with tarfile.open(archive) as tar:
+        for member in tar.getmembers():
+            destination = (inside / member.name).resolve()
+            if not (member.isfile() or member.isdir()) or (destination != inside and inside not in destination.parents):
+                skipped.append(member.name)
+                continue
+            tar.extract(member, path=str(inside))
+    return skipped
+
+
 def cmd_pull(args, root: Path) -> int:
     site = resolve(args.site, root)
     rel = clean_remote_path(args.remote)
     target = Path(args.local).expanduser() if args.local else site.work / (rel or "wordpress")
+    refuse_secret_path(root, target, "downloading to %s" % target)
     code, _, _ = remote.run_text(site, "test -d %s" % shlex.quote(rel or "."))
     if code == 0:
         archive = target.with_name(target.name + ".wpstudio.tar")
         if _stream_to(site, "tar -cf - -C %s ." % shlex.quote(rel or "."), archive, compress=False) != 0:
             return remote.EXIT_REMOTE
-        target.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(archive) as tar:
-            for member in tar.getmembers():
-                member_path = (target / member.name).resolve()
-                if not str(member_path).startswith(str(target.resolve())) or member.issym() or member.islnk():
-                    continue
-                tar.extract(member, path=str(target))
-        archive.unlink()
+        try:
+            extract_inside(archive, target)
+        finally:
+            archive.unlink()
     else:
         if _stream_to(site, "cat %s" % shlex.quote(rel), target, compress=False) != 0:
             return remote.EXIT_REMOTE

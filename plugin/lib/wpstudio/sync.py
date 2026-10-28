@@ -19,7 +19,10 @@ import sys
 from pathlib import Path
 from typing import List
 
-from . import PLUGIN_ROOT, __version__, dropbox, workspace
+import hashlib
+
+from . import PLUGIN_ROOT, __version__, dropbox, envfile, workspace
+from .v1_manifest import V1_FILE_HASHES
 
 TEMPLATES = PLUGIN_ROOT / "templates" / "workspace"
 
@@ -88,10 +91,46 @@ def sync(root: Path) -> List[str]:
         if _write_if_changed(git_dir / "hooks" / "pre-commit", pre_commit_hook(), executable=True):
             changed.append(".git/hooks/pre-commit")
     marker = root / workspace.MARKER
-    stamp = ("Claude WP Studio workspace. Kit version %s.\n" % __version__).encode("utf-8")
+    stamp = ("Claude WP Studio workspace. Kit version %s.\nid=%s\n" % (__version__, workspace.studio_id(root))).encode("utf-8")
     if _write_if_changed(marker, stamp):
         changed.append(workspace.MARKER)
+    changed.extend(move_secrets_out(root))
     return changed
+
+
+def move_secrets_out(root: Path) -> List[str]:
+    """Move connection files kept inside the studio (v1, early v2) to the secrets store outside it.
+
+    Each file is re-read with shell rules (v1 files were `source`d, so `KEY='v'   # note` is valid)
+    and rewritten in the v2 format with private permissions. A file already in the store wins; the
+    old copy is removed only if it holds the same values.
+    """
+    notes = []
+    for old in sorted((root / "projects").glob("*/.secrets/*.env")):
+        slug, env = old.parent.parent.name, old.stem
+        if env == "connection":
+            env = "live"
+        if not (workspace_names_ok(slug) and workspace_names_ok(env)):
+            continue
+        target = workspace.secrets_dir(root) / slug / ("%s.env" % env)
+        values = envfile.read(old)
+        if target.exists():
+            if envfile.read(target) != values:
+                notes.append("kept projects/%s/.secrets/%s (it differs from the stored copy; check it)" % (slug, old.name))
+                continue
+        else:
+            envfile.write(target, values, header="Connection details for %s (%s). Moved out of the studio folder." % (slug, env))
+        old.unlink()
+        notes.append("moved projects/%s/.secrets/%s out of the studio folder" % (slug, old.name))
+    for folder in (root / "projects").glob("*/.secrets"):
+        if folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+    return notes
+
+
+def workspace_names_ok(name: str) -> bool:
+    from .sites import NAME_RE
+    return NAME_RE.match(name) is not None
 
 
 # ── v1 → v2 ─────────────────────────────────────────────────────────────────────────────────────
@@ -108,10 +147,36 @@ def is_v1(root: Path) -> bool:
     return any((root / sign).exists() for sign in V1_SIGNS) and not (root / workspace.MARKER).exists()
 
 
+def _remove_v1_kit_files(root: Path, notes: List[str]) -> None:
+    """Delete what v1 shipped, unchanged. Anything edited or added moves to v1-kept/."""
+    kept = []
+    for rel in V1_KIT_PATHS:
+        path = root / rel
+        files = [path] if path.is_file() else sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else []
+        for item in files:
+            if item.name == "catalog.db" or hashlib.sha256(item.read_bytes()).hexdigest() in V1_FILE_HASHES:
+                item.unlink()
+                continue
+            target = root / "v1-kept" / item.relative_to(root)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(item), str(target))
+            kept.append(str(item.relative_to(root)))
+        if path.is_dir():
+            for folder in sorted((p for p in path.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+                if not any(folder.iterdir()):
+                    folder.rmdir()
+            if not any(path.iterdir()):
+                path.rmdir()
+    if kept:
+        notes.append("kept %d file(s) you added or changed in the old kit folders under v1-kept/: %s"
+                     % (len(kept), ", ".join(kept[:8]) + (" …" if len(kept) > 8 else "")))
+
+
 def migrate_v1(root: Path) -> List[str]:
     """Turn a v1 studio folder into a v2 workspace in place. Nothing of the operator's is deleted:
-    client docs move to clients/, the old manual is kept as CLAUDE.v1.md, and v1 connection files are
-    renamed to the v2 name. Everything is in git history as well."""
+    client docs move to clients/, files they wrote or changed in the old kit folders move to v1-kept/,
+    the old manual is kept as CLAUDE.v1.md, and connection files move to the secrets store. The
+    installer commits the studio before calling this, so git history holds the v1 state too."""
     notes = []
     old_clients = root / "library" / "clients"
     if old_clients.is_dir():
@@ -124,10 +189,6 @@ def migrate_v1(root: Path) -> List[str]:
                 shutil.move(str(doc), str(target))
                 notes.append("moved library/clients/%s to clients/" % doc.name)
     for project in (root / "projects").glob("*"):
-        old_env = project / ".secrets" / "connection.env"
-        if old_env.is_file() and not (project / ".secrets" / "live.env").exists():
-            old_env.rename(project / ".secrets" / "live.env")
-            notes.append("renamed projects/%s/.secrets/connection.env to live.env" % project.name)
         for helper in ("wp.sh", "db-pull.sh"):
             if (project / helper).is_file():
                 (project / helper).unlink()
@@ -144,18 +205,14 @@ def migrate_v1(root: Path) -> List[str]:
     if manual.is_file():
         manual.rename(root / "CLAUDE.v1.md")
         notes.append("kept the old operating manual as CLAUDE.v1.md (add anything personal from it to CLAUDE.md)")
-    for rel in V1_KIT_PATHS:
-        path = root / rel
-        if path.is_dir():
-            shutil.rmtree(path)
-        elif path.exists():
-            path.unlink()
+    _remove_v1_kit_files(root, notes)
     library = root / "library"
     for folder in (library / "clients", library):
         if folder.is_dir() and not any(folder.iterdir()):
             folder.rmdir()
-    for rel in (".claude/settings.json",):
-        (root / rel).unlink() if (root / rel).exists() else None
-    sync(root)
+    old_settings = root / ".claude" / "settings.json"
+    if old_settings.is_file():
+        old_settings.unlink()
+    notes.extend(n for n in sync(root) if n.startswith("moved ") or n.startswith("kept "))
     notes.append("installed the v2 workspace files")
     return notes

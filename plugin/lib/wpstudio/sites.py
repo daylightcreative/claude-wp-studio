@@ -34,8 +34,16 @@ class Site:
         return workspace.projects_dir(self.root) / self.slug
 
     @property
+    def secrets(self) -> Path:
+        return workspace.secrets_dir(self.root) / self.slug
+
+    @property
     def env_file(self) -> Path:
-        return self.project / ".secrets" / ("%s.env" % self.env)
+        return self.secrets / ("%s.env" % self.env)
+
+    @property
+    def server_secrets_file(self) -> Path:
+        return self.secrets / ("%s.server.json" % self.env)
 
     @property
     def backups(self) -> Path:
@@ -94,8 +102,9 @@ def list_sites(root: Path) -> List[Site]:
     base = workspace.projects_dir(root)
     if not base.is_dir():
         return found
+    store = workspace.secrets_dir(root)
     for project in sorted(p for p in base.iterdir() if p.is_dir() and NAME_RE.match(p.name)):
-        secrets = project / ".secrets"
+        secrets = store / project.name
         envs = sorted(f.stem for f in secrets.glob("*.env")) if secrets.is_dir() else []
         if not envs:
             found.append(Site(slug=project.name, env=DEFAULT_ENV, root=root))

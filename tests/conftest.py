@@ -14,6 +14,14 @@ PLUGIN = REPO / "plugin"
 sys.path.insert(0, str(PLUGIN / "lib"))
 
 
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch):
+    """Every test gets its own secrets store and SSH state, never the real ones."""
+    monkeypatch.setenv("WPSTUDIO_SECRETS_HOME", str(tmp_path / "secrets-home"))
+    monkeypatch.setenv("WPSTUDIO_KNOWN_HOSTS", str(tmp_path / "known_hosts"))
+    monkeypatch.setenv("WPSTUDIO_KEY", str(tmp_path / "key"))
+
+
 @pytest.fixture
 def studio(tmp_path, monkeypatch):
     """A fresh, synced studio workspace that is a git repo, with the cwd inside it."""
@@ -32,14 +40,20 @@ def studio(tmp_path, monkeypatch):
 
 
 def make_site(root, slug="acme", env="live", values=None):
+    import json
+    import time
     from wpstudio import envfile
+    from wpstudio.sites import Site
 
     project = root / "projects" / slug
     (project / "backups").mkdir(parents=True, exist_ok=True)
     data = {"SITE_URL": "https://acme.test", "SSH_HOST": "203.0.113.5", "SSH_PORT": "2222",
             "SSH_USER": "acme", "SSH_PASSWORD": "Hunter2-secret!", "WP_PATH": "/www/acme/public"}
     data.update(values or {})
-    envfile.write(project / ".secrets" / ("%s.env" % env), data)
+    site = Site(slug=slug, env=env, root=root)
+    envfile.write(site.env_file, data)
+    # What wpsite would have learned from wp-config.php (so tests don't need a server for it).
+    site.server_secrets_file.write_text(json.dumps({"fetched": time.time(), "values": ["db-pass-from-server"]}))
     return project
 
 

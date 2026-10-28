@@ -18,8 +18,8 @@ A *site* is `<slug>` (the live environment) or `<slug>:<env>` (for example `acme
 | Command | What it does |
 |---|---|
 | `wpsite list` | Projects and their environments, with which connection fields are set (never values) |
-| `wpsite init <slug> --url <url>` | Create `projects/<slug>/` (CLAUDE.md, backups/, work/, .secrets/) |
-| `wpsite secrets file <site>` | File what the operator pasted in `CREDENTIALS.txt` into the site's `.secrets/<env>.env`; prints field names only; wipes the drop box |
+| `wpsite init <slug> --url <url>` | Create `projects/<slug>/` (CLAUDE.md, backups/, work/) and `clients/<slug>.md` |
+| `wpsite secrets file <site>` | File what the operator pasted in `CREDENTIALS.txt` into the secrets store outside the studio folder; prints field names only; wipes the drop box |
 | `wpsite secrets status [<site>]` | Whether the drop box has something in it, or which fields a site has |
 | `wpsite check <site>` | Connect and report read-only facts: WP version, home URL, search visibility, host, cache layer, CLI PHP version |
 | `wpsite wp <site> <wp-cli args…>` | Run WP-CLI on the server. Any command that can change the site is refused unless a database backup of that environment less than 2 hours old exists |

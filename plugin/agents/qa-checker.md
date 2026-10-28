@@ -19,7 +19,7 @@ change anything.
 - You may fetch public pages with `curl` and a browser tool. **Never submit a form, log in, or
   click anything that sends data.** If your dimension needs a submission, report it as
   "needs main-loop check".
-- **Never** use `ssh`, `scp`, `sftp` or `rsync`, or open `CREDENTIALS.txt` or a `.secrets/` folder.
+- **Never** use `ssh`, `scp`, `sftp` or `rsync`, or open `CREDENTIALS.txt` or the secrets store (`~/.config/wp-studio`).
 - **Bust the cache on every fetch**: add a unique query string, e.g.
   `curl -s "https://www.example.com/about/?cb=$RANDOM"`, and a fresh `?cb=` value on every browser
   navigation.

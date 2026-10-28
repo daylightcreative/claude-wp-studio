@@ -23,27 +23,34 @@ These hold whatever Claude decides. Each is covered by the test suite:
 
 | Rule | Enforced by |
 |---|---|
-| No change to a site without a verified database backup of that environment from the last 2 hours | `wpsite` (fails closed: any command not known to be read-only counts as a change) |
+| No change to a site, including a deploy, without a verified database backup of that environment from the last 2 hours | `wpsite`. It fails closed: a WP-CLI command, flag or shell program not known to be read-only counts as a change |
 | PHP is syntax-checked by the server's own PHP before it can be loaded | `wpsite deploy` (uploads to a private folder outside the website, checks, then renames into place) |
 | The previous version of anything replaced is kept | `wpsite deploy` |
 | Folders shared with other things (`wp-content/plugins`, `themes`, `uploads` and the like) can't be replaced wholesale | `wpsite deploy` |
-| Database passwords and WordPress keys and salts are hidden in output; `wp config get DB_PASSWORD` is refused | `wpsite` |
-| Raw `ssh`, `scp`, `sftp` and `rsync` to a server are refused | the plugin's Bash hook |
-| Claude can't read `CREDENTIALS.txt` or any `.secrets/` folder | permission deny rules (file tools and the file commands Claude Code recognises) plus the Bash hook |
+| The site's database password, keys and salts, and anything secret in its connection details, are masked wherever they appear in output | `wpsite` (it learns the actual values from `wp-config.php` and masks them by value, not by guessing the output's shape) |
+| Raw `ssh`, `scp`, `sftp` and `rsync` to a server are refused, wherever they sit in a command line | the plugin's Bash hook |
+| Claude's file tools can't open the drop box, the secrets store or `~/.ssh`, and shell commands that name them (globs included) are refused | permission deny rules plus the Bash hook |
+| The read-only agents (`site-scout`, `qa-checker`, `page-converter`) can't run a `wpsite` command that changes a site | the Bash hook |
 | Nothing secret reaches git or your GitHub backup | `.gitignore`, plus a scan before every commit (also run as a git pre-commit hook). It refuses any value the studio holds for a site, private keys, wp-config secrets, common API-token formats, database dumps, and files too big for GitHub |
 
-**Where these stop.** The Bash hook reads command text. A program Claude writes during a session
-(a Python script that opens a network connection itself, say) isn't something it can see. That
-case is left to the auto-mode classifier, which reviews what the program does. The backup rule
-needs the backup to be *fresh*. It doesn't check that the backup covers the specific change, and
-it doesn't restore anything for you.
+**Where these stop.**
+- The Bash hook reads command text. It can't see a program Claude writes during a session (a
+  Python script that opens a connection or a file itself), or a command assembled from variables at
+  run time. The auto-mode classifier is the layer for those.
+- The secrets store lives outside the studio folder, so a search inside the studio can't come
+  across it. A search of your whole home folder could; that is a classifier matter too.
+- The drop box is inside the studio folder while it holds something. Tell Claude as soon as
+  you've filled it, so it gets filed and cleared.
+- The backup rule needs a backup that is *fresh*. It doesn't check that the backup covers the
+  specific change, and it doesn't restore anything for you.
 
 ## Where your passwords go
 
 1. You type a site's login into `CREDENTIALS.txt` in your studio folder.
-2. `wpsite secrets file <site>` reads it and writes the details to
-   `projects/<site>/.secrets/<env>.env` (permissions `600`, inside a `700` folder). It then resets
-   the drop box to blank. What it prints names the fields it filed, never their values.
+2. `wpsite secrets file <site>` reads it and writes the details to the secrets store,
+   `~/.config/wp-studio/secrets/<studio id>/<site>/<env>.env`. The store is outside the studio
+   folder, the file is `600` and the folders `700`. It then resets the drop box to blank. What it
+   prints names the fields it filed, never their values.
 3. When `wpsite` connects, it hands the SSH password to `ssh` through `SSH_ASKPASS`, a helper that
    reads it from the environment. The password never appears on a command line, in a terminal
    prompt or in the conversation.
@@ -62,7 +69,8 @@ dashboard, it prints the public key for you to add there.
 - The wp-studio plugin, from this repository's marketplace. Third-party plugins can run code on
   your Mac with your permissions; this one runs the Python in `plugin/` (standard library only)
   and the pinned Playwright MCP server (`@playwright/mcp`, exact version in `plugin/.mcp.json`).
-- The Chrome-for-Testing browser that Playwright uses (headless, separate from your own browser).
+- The Chrome for Testing build that the pinned Playwright MCP expects (headless, separate from your own
+  Chrome, which the studio doesn't use).
 
 ## Backups
 

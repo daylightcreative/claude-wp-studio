@@ -5,7 +5,7 @@
       "Organization: a WordPress studio run by its operator. Primary use: building and maintaining clients' WordPress websites.",
       "Key internal services: `wpsite`, the studio's own command for reaching client WordPress sites over SSH. It is the sanctioned route to those sites: it refuses changes without a fresh verified database backup, lints PHP on the server before deploying, keeps the previous version of anything it replaces, and redacts secrets from its output. `studio` is the studio's own save and backup command.",
       "Sensitive remote targets: the live client websites reached through `wpsite` (a site name without a ':staging' or other environment suffix). Routine changes the operator asked for are in scope; deleting content, users, plugins or themes, importing or resetting a database, search-replace across a database, and DNS changes need the operator's explicit go-ahead in the conversation first.",
-      "Secrets management: site connection details live in projects/<site>/.secrets/*.env, filed there by `wpsite secrets file`. Claude never reads them or the CREDENTIALS.txt drop box.",
+      "Secrets management: site connection details live in ~/.config/wp-studio/secrets (outside the studio folder), filed there by `wpsite secrets file`. Claude never reads them, the CREDENTIALS.txt drop box, or the studio's SSH key (~/.ssh/wpstudio_ed25519).",
       "Source control: this studio folder is a git repository backed up to the operator's own private GitHub repository."
     ]
   }

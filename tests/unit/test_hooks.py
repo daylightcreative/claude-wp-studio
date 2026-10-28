@@ -15,7 +15,11 @@ def decision(command):
     "cd x && ssh -p 22 u@h 'wp plugin list'", "bash -c 'ssh u@h ls'", "/usr/bin/ssh u@h",
     "rsync -az theme/ user@host:/www/theme/", "rsync -e 'ssh -p 2222' a b", "ssh-copy-id u@h",
     "curl -T x.php sftp://host/www/", "lftp -u u,p host", "sudo ssh u@h", "echo hi; scp a u@h:b",
+    # Review round 1: positions the old separator regex missed.
+    "if ssh deploy@1.2.3.4 true; then echo ok; fi", "{ ssh u@h ls; }", "! ssh u@h", "\"ssh\" u@h",
+    "timeout 5 ssh u@h", "env FOO=1 ssh u@h", "eval ssh u@h", "xargs -n1 ssh < hosts", "ls\nssh u@h",
 ])
+
 def test_raw_remote_access_is_blocked(command):
     assert decision(command) == "deny"
 
@@ -24,15 +28,18 @@ def test_raw_remote_access_is_blocked(command):
     "wpsite wp acme plugin list", "ssh-keygen -t ed25519 -f k", "git commit -m 'Set up ssh key login'",
     "rsync -a src/ dest/", "grep -r sshd_config docs", "echo 'use wpsite instead of ssh'",
     "wpsite deploy acme theme wp-content/themes/acme", "git push origin HEAD",
+    "grep -r ssh docs", "rsync -a src/ dest/", "find . -name '*.php' -newer x",
 ])
 def test_ordinary_commands_pass(command):
     assert decision(command) is None
 
 
 @pytest.mark.parametrize("command", [
-    "cat CREDENTIALS.txt", "head -5 projects/acme/.secrets/live.env", "python3 -c \"open('CREDENTIALS.txt').read()\"",
-    "grep -r PASSWORD projects/acme/.secrets", "cp projects/acme/.secrets/live.env /tmp/x",
-    "wpsite secrets file acme && cat CREDENTIALS.txt", "ls projects/acme/.secrets/",
+    "cat CREDENTIALS.txt", "cat credentials.txt", "cat CRED*.txt", "tail -n5 CREDENTIALS.tx?",
+    "python3 -c \"open('CREDENTIALS.txt').read()\"", "wpsite secrets file acme && cat CREDENTIALS.txt",
+    "cat ~/.config/wp-studio/secrets/x/acme/live.env", "grep -r PASSWORD ~/.config/wp-studio",
+    "ls ~/.config/*/secrets", "cp $HOME/.config/wp-studio/secrets/x/acme/live.env /tmp/x",
+    "ssh -i ~/.ssh/wpstudio_ed25519 u@h", "ssh -o ControlPath=~/.ssh/wpstudio/%C u@h",
 ])
 def test_secret_paths_are_blocked_outside_wpsite(command):
     assert decision(command) == "deny"
@@ -68,3 +75,18 @@ def test_session_start_reports_a_failed_backup_push(studio):
     (studio / ".git" / "wp-studio-push.json").write_text(json.dumps({"ok": False, "time": "T", "message": "auth expired"}))
     context = hooks.session_start({"cwd": str(studio)})["hookSpecificOutput"]["additionalContext"]
     assert "last GitHub backup push failed (T): auth expired" in context
+
+
+@pytest.mark.parametrize("command,agent,denied", [
+    ("wpsite wp acme plugin list", "wp-studio:qa-checker", False),
+    ("wpsite check acme && wpsite pull acme wp-content/themes/x", "wp-studio:site-scout", False),
+    ("wpsite sh acme 'ls wp-content'", "wp-studio:site-scout", False),
+    ("wpsite wp acme plugin deactivate x", "wp-studio:qa-checker", True),
+    ("wpsite deploy acme x wp-content/mu-plugins/x.php", "wp-studio:site-scout", True),
+    ("wpsite sh acme 'rm -rf wp-content/cache'", "wp-studio:qa-checker", True),
+    ("wpsite purge acme", "wp-studio:page-converter", True),
+    ("wpsite wp acme --input x.html post update 1 -", "wp-studio:page-converter", True),
+    ("wpsite wp acme plugin deactivate x", None, False),
+])
+def test_read_only_agents_cannot_change_sites(command, agent, denied):
+    assert (hooks.check_bash(command, agent) is not None) is denied

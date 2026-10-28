@@ -16,11 +16,27 @@
 #   Options:
 #     --dir <path>        where the studio lives (default: ~/claude-wp-studio)
 #     --no-backup         skip the GitHub backup step
-#     --unattended        accept every default, ask nothing (needs sudo already authorized
-#                         if Homebrew isn't installed yet)
+#     --unattended        ask nothing (no backup unless one is already linked; needs sudo
+#                         already authorized if Homebrew isn't installed yet)
 #     --source <src>      plugin marketplace: owner/repo on GitHub (default) or a local folder
 #
 set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Claude WP Studio installer (macOS)
+
+  curl -fsSL https://get.daylightcreative.tech/wp-studio | bash
+  curl -fsSL https://get.daylightcreative.tech/wp-studio | bash -s -- [options]
+
+Options:
+  --dir <path>     where the studio lives (default: ~/claude-wp-studio)
+  --no-backup      skip the GitHub backup step
+  --unattended     ask nothing: no backup unless already linked; needs sudo already
+                   authorized if Homebrew isn't installed yet
+  --source <src>   plugin marketplace: owner/repo on GitHub (default) or a local folder
+EOF
+}
 
 SOURCE="${CLAUDE_WP_STUDIO_SOURCE:-daylightcreative/claude-wp-studio}"
 STUDIO_DIR="${CLAUDE_WP_STUDIO_DIR:-}"
@@ -35,7 +51,7 @@ while [ $# -gt 0 ]; do
     --no-backup)  NO_BACKUP=1 ;;
     --dir)        STUDIO_DIR="${2:?--dir needs a path}"; shift ;;
     --source)     SOURCE="${2:?--source needs a value}"; shift ;;
-    -h|--help)    sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)    usage; exit 0 ;;
     *) echo "Unknown option: $1 (try --help)"; exit 2 ;;
   esac
   shift
@@ -120,6 +136,9 @@ done
 # ── 3. Claude Code ──────────────────────────────────────────────────────────────────────────────
 step "Claude Code"
 export PATH="$HOME/.local/bin:$PATH"
+# Claude Code's native installer puts `claude` in ~/.local/bin but doesn't add it to PATH.
+# shellcheck disable=SC2016  # written literally: new shells expand it
+grep -qs 'HOME/.local/bin' "$HOME/.zprofile" || printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.zprofile"
 if command -v claude >/dev/null 2>&1; then
   run claude update || true
   ok "$(claude --version 2>/dev/null | head -1)"
@@ -138,7 +157,10 @@ mkdir -p "$STUDIO_DIR"
 STUDIO_DIR="$(cd "$STUDIO_DIR" && pwd)"
 ok "$STUDIO_DIR"
 cd "$STUDIO_DIR"
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || run git init -b main
+# The studio is its own repository, even inside another one (a dotfiles home folder, say).
+if [ "$(git rev-parse --show-toplevel 2>/dev/null)" != "$STUDIO_DIR" ]; then
+  run git init -b main || die "Couldn't create the studio's git repository."
+fi
 
 # ── 5. The plugin ───────────────────────────────────────────────────────────────────────────────
 step "The wp-studio plugin"
@@ -150,19 +172,29 @@ else
 fi
 run claude plugin marketplace add "$SOURCE" --scope "$SCOPE" || die "Couldn't add the plugin marketplace ($SOURCE)."
 run claude plugin marketplace update daylight || true
-if ! run claude plugin install wp-studio@daylight --scope "$SCOPE"; then
-  run claude plugin update wp-studio@daylight --scope "$SCOPE" || die "Couldn't install the wp-studio plugin."
-fi
+run claude plugin install wp-studio@daylight --scope "$SCOPE" || die "Couldn't install the wp-studio plugin."
+# `install` succeeds without changing anything when an older version is already installed.
+run claude plugin update wp-studio@daylight --scope "$SCOPE" || die "Couldn't update the wp-studio plugin."
 PLUGIN_ROOT="$(claude plugin list --json 2>>"$LOG" | /usr/bin/python3 -c '
 import json, sys
 for p in json.load(sys.stdin):
     if p.get("id") == "wp-studio@daylight":
         print(p.get("readFromFolder") or p.get("installPath")); break
 ')"
-[ -n "$PLUGIN_ROOT" ] && [ -x "$PLUGIN_ROOT/bin/studio" ] || die "The plugin installed, but its files weren't found."
+if [ -z "$PLUGIN_ROOT" ] || [ ! -x "$PLUGIN_ROOT/bin/studio" ]; then
+  die "The plugin installed, but its files weren't found."
+fi
 STUDIO=("/usr/bin/python3" "$PLUGIN_ROOT/bin/studio")
 ok "wp-studio $("${STUDIO[@]}" --version | awk '{print $2}')"
 
+if [ -f tooling/catalog.py ] && [ ! -f .wp-studio ]; then
+  # Snapshot the v1 studio in git first, so every file is recoverable whatever the upgrade does.
+  run git add -A || die "Couldn't save your v1 studio to git before upgrading, so nothing was changed."
+  if ! git diff --cached --quiet; then
+    run git commit -q -m "Before upgrading to Claude WP Studio v2" \
+      || die "Couldn't save your v1 studio to git before upgrading, so nothing was changed."
+  fi
+fi
 MIGRATION="$("${STUDIO[@]}" migrate-v1 "$STUDIO_DIR")" || die "Upgrading the v1 studio failed."
 log "$MIGRATION"
 if printf '%s\n' "$MIGRATION" | grep -q '^- '; then
@@ -170,12 +202,12 @@ if printf '%s\n' "$MIGRATION" | grep -q '^- '; then
   printf '%s\n' "$MIGRATION" | sed 's/^/      /'
 fi
 touch .wp-studio
-run "${STUDIO[@]}" sync
+run "${STUDIO[@]}" sync || die "Couldn't lay down the studio files."
 ok "studio files in place"
 
 # ── 6. The browser the studio looks at pages with ───────────────────────────────────────────────
 step "Browser for checking pages"
-MCP_VERSION="$("${STUDIO[@]}" mcp-version)"
+MCP_VERSION="$("${STUDIO[@]}" mcp-version)" || die "Couldn't read the browser version from the plugin."
 if run npx -y "@playwright/mcp@$MCP_VERSION" install-browser chrome-for-testing; then
   ok "installed (Playwright MCP $MCP_VERSION)"
 else
@@ -187,7 +219,7 @@ step "Backup"
 run "${STUDIO[@]}" save "Set up Claude WP Studio" || die "The first save failed."
 if git remote get-url origin >/dev/null 2>&1; then
   ok "already backed up to $(git remote get-url origin)"
-elif [ "$NO_BACKUP" = 1 ] || ! confirm "Back up your studio to a private GitHub repository on your own account?"; then
+elif [ "$NO_BACKUP" = 1 ] || ! interactive || ! confirm "Back up your studio to a private GitHub repository on your own account?"; then
   warn "saving on this Mac only. To add a GitHub backup later, ask Claude: \"set up my GitHub backup\"."
 else
   gh auth status >/dev/null 2>&1 || gh auth login --hostname github.com --git-protocol https --web < /dev/tty || true

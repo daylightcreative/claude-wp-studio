@@ -15,7 +15,7 @@ never put anything on the site.
   `wpsite pull <site> <remote> [<local>]`. **Never run `wpsite deploy`, `wpsite purge`,
   `wpsite sh`, `wpsite backup`, or any `wp` command that creates, updates or deletes** — not even
   on staging. The caller reviews and deploys.
-- **Never** use `ssh`, `scp`, `sftp` or `rsync`, or open `CREDENTIALS.txt` or a `.secrets/` folder.
+- **Never** use `ssh`, `scp`, `sftp` or `rsync`, or open `CREDENTIALS.txt` or the secrets store (`~/.config/wp-studio`).
 - Write only inside `projects/<slug>/work/`, at the path the caller gives (default
   `work/convert/<ID>.html` and `work/convert/<ID>.notes.md`).
 - **Block, don't improvise.** If part of the page has no clean equivalent in the mapping (a

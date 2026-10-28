@@ -21,7 +21,7 @@ URL the public actually visits, with the scheme and the right `www.` choice:
 wpsite init acme --url https://www.example.com
 ```
 
-`init` creates `projects/acme/` (`CLAUDE.md`, `backups/`, `work/`, `.secrets/`) and fills the
+`init` creates `projects/acme/` (`CLAUDE.md`, `backups/`, `work/`) and fills the
 `{{slug}}`, `{{url}}` and `{{date}}` placeholders in this skill's two templates,
 `project-CLAUDE.md` and `client.md`. If `clients/acme.md` does not exist afterwards, create it
 from `client.md` in this folder with those three values filled in.
@@ -29,7 +29,7 @@ from `client.md` in this folder with those three values filled in.
 ## 2. Get the login through the drop box
 
 **Never ask for a password, key or SSH detail in chat, and never open `CREDENTIALS.txt` or any
-`.secrets/` file yourself.** `wpsite` reads them; you only ever see field names.
+secrets store yourself.** It lives outside the studio folder (`~/.config/wp-studio`); `wpsite` reads it, and you only ever see field names.
 
 Tell the operator, in plain words:
 
@@ -159,7 +159,7 @@ how the operator clears that part.
 
 This is the durable record of the engagement: who the client is, what the site is for, what the
 operator was hired to do, decisions (date, who decided, why), and a dated log. It names **where**
-the secrets live (`projects/<slug>/.secrets/<env>.env`) and never holds a secret.
+the secrets live (the studio's secrets store, filed with `wpsite secrets file`) and never holds a secret.
 
 **Give each fact one home.** Operating procedure lives in the project `CLAUDE.md`; narrative,
 decisions and the log live in the client file. When the same procedure was kept in both on a real

@@ -4,7 +4,7 @@ Site: {{url}}
 Record started: {{date}}
 Project folder: `projects/{{slug}}/` (operating manual: `projects/{{slug}}/CLAUDE.md`)
 
-**No secrets in this file.** Logins live in `projects/{{slug}}/.secrets/<env>.env`, filed by
+**No secrets in this file.** Logins live in the studio's secrets store (outside this folder), filed by
 `wpsite secrets file`. Name where a secret lives; never write its value.
 
 ## The engagement

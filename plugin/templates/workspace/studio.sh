@@ -5,6 +5,8 @@
 # action and stops anything risky or irreversible for you to confirm. The studio's own rules
 # (backups before changes, PHP checked before it goes live) are enforced by the wpsite tool.
 cd "$(dirname "$0")" || exit 1
+# Claude Code's installer puts `claude` in ~/.local/bin, which a new Terminal window may not have on PATH.
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH" ;; esac
 if ! command -v claude >/dev/null 2>&1; then
   echo "Claude Code isn't installed or isn't on your PATH yet. Open a new Terminal window and try again,"
   echo "or reinstall the studio: curl -fsSL https://get.daylightcreative.tech/wp-studio | bash"

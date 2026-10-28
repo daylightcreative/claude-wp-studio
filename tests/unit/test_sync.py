@@ -1,6 +1,8 @@
 import stat
+import subprocess
 
 from wpstudio import sync
+from conftest import REPO
 
 
 def test_kit_owned_files_are_restored(studio):
@@ -39,7 +41,13 @@ def test_v1_studio_migrates_without_losing_operator_files(tmp_path):
     (root / "library" / "clients" / "README.md").write_text("readme")
     secrets = root / "projects" / "acme" / ".secrets"
     secrets.mkdir(parents=True)
-    (secrets / "connection.env").write_text("SSH_HOST='h'\n")
+    # Written the way the v1 template wrote it: shell-quoted, with a trailing comment.
+    (secrets / "connection.env").write_text("SSH_HOST='h'\nSSH_PORT='22'   # custom port\nSSH_PASSWORD='it'\\''s'\n")
+    (root / "library" / "lessons").mkdir(parents=True)
+    (root / "library" / "lessons" / "our_host_quirk.md").write_text("# learned the hard way")
+    shipped = subprocess.run(["git", "-C", str(REPO), "show", "29eba5a:library/lessons/caching_by_host.md"],
+                             capture_output=True, check=True).stdout
+    (root / "library" / "lessons" / "caching_by_host.md").write_bytes(shipped)
     (root / "projects" / "acme" / "wp.sh").write_text("")
     (root / "projects" / "acme" / "backups").mkdir()
     (root / "projects" / "acme" / "backups" / "page-1.html").write_text("old")
@@ -48,7 +56,13 @@ def test_v1_studio_migrates_without_losing_operator_files(tmp_path):
     assert sync.is_v1(root) is True
     sync.migrate_v1(root)
     assert (root / "clients" / "acme.md").read_text() == "# Acme"
-    assert (secrets / "live.env").read_text() == "SSH_HOST='h'\n"
+    from wpstudio import envfile, workspace
+    stored = workspace.secrets_dir(root) / "acme" / "live.env"
+    assert envfile.read(stored) == {"SSH_HOST": "h", "SSH_PORT": "22", "SSH_PASSWORD": "it's"}
+    assert stat.S_IMODE(stored.stat().st_mode) == 0o600
+    assert not secrets.exists()
+    assert (root / "v1-kept" / "library" / "lessons" / "our_host_quirk.md").read_text() == "# learned the hard way"
+    assert not (root / "v1-kept" / "library" / "lessons" / "caching_by_host.md").exists()
     assert not (root / "projects" / "acme" / "wp.sh").exists()
     assert (root / "projects" / "acme" / "backups" / "v1" / "page-1.html").read_text() == "old"
     assert (root / "CLAUDE.v1.md").read_text() == "old manual + my notes"

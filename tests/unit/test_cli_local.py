@@ -49,7 +49,11 @@ def test_init_creates_project_and_client_record(studio):
     claude_md = (studio / "projects" / "acme" / "CLAUDE.md").read_text()
     assert "{{" not in claude_md and "acme" in claude_md
     assert "https://acme.test" in (studio / "clients" / "acme.md").read_text()
-    assert stat.S_IMODE((studio / "projects" / "acme" / ".secrets").stat().st_mode) == 0o700
+    from wpstudio import workspace
+    stored = workspace.secrets_dir(studio) / "acme" / "live.env"
+    assert stat.S_IMODE(stored.stat().st_mode) == 0o600
+    assert stat.S_IMODE(stored.parent.parent.stat().st_mode) == 0o700
+    assert not (studio / "projects" / "acme" / ".secrets").exists()
 
 
 def test_init_refuses_an_existing_project(studio):
@@ -145,3 +149,43 @@ def test_outside_a_studio_wpsite_says_so(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = wpsite("list")
     assert result.returncode == 2 and "isn't inside a Claude WP Studio folder" in result.stderr
+
+
+def test_deploy_needs_a_fresh_backup(studio, fake_ssh, tmp_path):
+    make_site(studio)
+    source = tmp_path / "x.php"
+    source.write_text("<?php\n")
+    result = wpsite("deploy", "acme", str(source), "wp-content/mu-plugins/x.php")
+    assert result.returncode == 3 and "wpsite backup acme" in result.stderr
+    assert not fake_ssh.exists()
+
+
+def test_input_and_deploy_cannot_read_the_drop_box(studio, fake_ssh):
+    project = make_site(studio)
+    make_backup(project)
+    assert wpsite("sh", "acme", "--input", str(studio / "CREDENTIALS.txt"), "cat").returncode == 3
+    assert wpsite("deploy", "acme", str(studio / "CREDENTIALS.txt"), "wp-content/x.txt").returncode == 3
+
+
+def test_the_servers_own_secrets_are_masked_in_any_output(studio, fake_ssh):
+    make_site(studio)
+    result = wpsite("sh", "acme", "echo db-pass-from-server")
+    assert result.returncode == 0
+    assert "db-pass-from-server" not in result.stdout and "[redacted]" in result.stdout
+
+
+def test_pulled_archives_cannot_write_outside_their_folder(tmp_path):
+    import io
+    import tarfile as tf
+    sys.path.insert(0, str(PLUGIN / "lib"))
+    from wpstudio.cli import extract_inside
+    archive = tmp_path / "x.tar"
+    with tf.open(archive, "w") as tar:
+        for name in ("ok.txt", "../escaped.txt", "sub/../../escaped2.txt"):
+            info = tf.TarInfo(name); data = b"x"; info.size = len(data); tar.addfile(info, io.BytesIO(data))
+        link = tf.TarInfo("link"); link.type = tf.SYMTYPE; link.linkname = "/etc/passwd"; tar.addfile(link)
+    target = tmp_path / "work" / "wordpress"
+    skipped = extract_inside(archive, target)
+    assert sorted(skipped) == ["../escaped.txt", "link", "sub/../../escaped2.txt"]
+    assert (target / "ok.txt").read_text() == "x"
+    assert not (tmp_path / "work" / "escaped.txt").exists() and not (tmp_path / "escaped2.txt").exists()

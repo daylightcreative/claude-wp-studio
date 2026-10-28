@@ -32,7 +32,8 @@ macOS. Needs a Claude subscription or API key. MIT licensed. Rather not pipe to 
 - **A browser.** Claude looks at the real rendered page, at desktop and phone widths, rather than
   guessing.
 - **Passwords never go in the chat.** You type them into a drop-box file. The studio files them
-  away without Claude seeing them, and blocks Claude from reading them afterwards.
+  into a store outside the studio folder without Claude seeing them, and blocks Claude from
+  opening them afterwards.
 - **Backed up as you go.** Your studio is a git repository that saves to a private GitHub
   repository on your own account. Any save that would include a password is refused.
 
@@ -62,10 +63,11 @@ Then talk to Claude:
 
 Run the installer again and point it at your existing folder. It keeps everything that's yours:
 - client records move to `clients/`;
-- connection files are renamed;
+- connection files move to the secrets store (comments and quoting from v1 files are handled);
+- lessons or guides you added or changed in the old kit folders are kept under `v1-kept/`;
 - old backups stay under `backups/v1/`;
 - your old `CLAUDE.md` is kept as `CLAUDE.v1.md`;
-- the full history stays in git.
+- the studio is committed to git before anything moves, so the full v1 state stays in history.
 
 ## Already use Claude Code?
 

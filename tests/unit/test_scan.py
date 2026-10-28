@@ -42,9 +42,9 @@ def test_files_over_the_github_limit_are_blocked():
     assert len(findings) == 1 and "GitHub refuses" in findings[0].reason
 
 
-def test_known_secrets_come_from_site_files_but_not_hosts_or_users(studio):
+def test_known_secrets_include_filed_and_server_secrets_but_not_hosts_or_users(studio):
     make_site(studio)
-    assert scan.known_secrets(studio) == ["Hunter2-secret!"]
+    assert scan.known_secrets(studio) == ["db-pass-from-server", "Hunter2-secret!"]
 
 
 def test_scan_staged_reads_the_index(studio):

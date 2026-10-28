@@ -15,8 +15,8 @@
     "deny": [
       "Read(./CREDENTIALS.txt)",
       "Edit(./CREDENTIALS.txt)",
-      "Read(**/.secrets/**)",
-      "Edit(**/.secrets/**)",
+      "Read(~/.config/wp-studio/**)",
+      "Edit(~/.config/wp-studio/**)",
       "Edit(**/backups/**)",
       "Read(~/.ssh/**)"
     ]

@@ -46,7 +46,7 @@ def test_hooks_use_exec_form_with_a_sessionend_budget():
 
 def test_workspace_denies_file_tools_on_secrets():
     deny = set(load(PLUGIN / "templates" / "workspace" / "settings.json")["permissions"]["deny"])
-    assert {"Read(./CREDENTIALS.txt)", "Read(**/.secrets/**)", "Edit(**/.secrets/**)"} <= deny
+    assert {"Read(./CREDENTIALS.txt)", "Read(~/.config/wp-studio/**)", "Edit(~/.config/wp-studio/**)", "Read(~/.ssh/**)"} <= deny
 
 
 def test_launcher_uses_auto_mode_not_bypass():

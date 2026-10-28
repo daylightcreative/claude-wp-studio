@@ -10,17 +10,19 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
 import time
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
+
+from . import shellwords
 
 BACKUP_MAX_AGE = 2 * 60 * 60  # seconds
 BACKUP_GLOB = "db-*.sql.gz"
 VERIFIED_SUFFIX = ".verified.json"
 
 # WP-CLI commands that only read, keyed by command path. A value of None means every subcommand
-# under that path reads; a set lists the subcommands that read.
+# under that path reads; a set lists the subcommands that read. Only core WP-CLI commands are here:
+# a plugin's own commands can do anything.
 _READ_SUB = {
     "list", "get", "status", "exists", "is-installed", "is-active", "path", "search",
     "verify-checksums", "check-update", "version", "count", "pluck", "has", "type",
@@ -48,10 +50,9 @@ WP_READ = {
     ("menu", "location"): {"list"},
     ("widget",): {"list"},
     ("sidebar",): {"list"},
-    ("db",): {"size", "tables", "columns", "check", "prefix", "search"},
+    ("db",): {"size", "tables", "columns", "prefix", "search"},
     ("cron", "event"): {"list"},
     ("cron", "schedule"): {"list"},
-    ("cron",): {"test"},
     ("cache",): {"get", "type"},
     ("transient",): {"get", "type"},
     ("config",): {"get", "list", "has", "path"},
@@ -62,22 +63,52 @@ WP_READ = {
     ("language", "core"): {"list"},
     ("language", "plugin"): {"list"},
     ("language", "theme"): {"list"},
-    ("cli",): None,
+    ("cli",): {"version", "info", "has-command"},
     ("help",): None,
     ("package",): {"list", "path"},
-    ("block",): None,
-    ("pattern",): {"list", "get"},
 }
 # Cache clearing changes nothing a backup would restore, so it never needs one.
 WP_CACHE_SAFE = {
     ("cache", "flush"), ("kinsta", "cache", "purge"), ("litespeed-purge",), ("rocket", "clean"),
-    ("w3-total-cache", "flush"), ("super-cache", "flush"), ("sg", "purge"), ("transient", "delete"),
+    ("w3-total-cache", "flush"), ("super-cache", "flush"), ("sg", "purge"),
 }
+# Flags allowed on a read. WP-CLI's global flags include --exec and --require (run arbitrary PHP),
+# --ssh and --http (run somewhere else) and --path, so anything not listed here makes the command
+# count as a change. Names with an underscore are field filters on list commands (--post_type=page).
+WP_SAFE_FLAGS = {
+    "format", "fields", "field", "status", "number", "orderby", "order", "search", "search-columns",
+    "role", "skip-plugins", "skip-themes", "skip-packages", "quiet", "url", "user", "debug", "color",
+    "no-color", "all", "type", "name", "per-page", "network", "porcelain", "strict", "raw", "include",
+    "exclude", "page", "limit", "offset", "prefix", "all-tables", "all-tables-with-prefix", "regex",
+    "regex-flags", "regex-delimiter", "scope", "dry-run", "report", "report-changed-only", "precise",
+    "skip-columns", "include-columns", "skip-tables", "minor", "major", "patch", "force-check",
+    "detail", "human-readable", "decimals", "size_format", "tables", "post_type", "version", "info",
+    "matching", "stable", "context",
+}
+WP_UNSAFE_FLAGS = {"exec", "require", "ssh", "http", "path", "prompt", "skip-wordpress"}
+DUMP_SAFE_FLAGS = {"single-transaction", "quick", "add-drop-table", "tables", "exclude_tables", "porcelain",
+                   "skip-plugins", "skip-themes", "quiet"}
 SQL_READ = re.compile(r"^\s*(select|show|describe|desc|explain)\b", re.I)
+SQL_WRITES_FILE = re.compile(r"\binto\s+(out|dump)file\b", re.I)
+
+
+def _flag_name(arg: str) -> str:
+    return arg[2:].split("=", 1)[0]
+
+
+def _safe_flag(arg: str, allowed=None) -> bool:
+    if not arg.startswith("--"):
+        return False  # short flags and anything else unknown
+    name = _flag_name(arg)
+    if name in WP_UNSAFE_FLAGS:
+        return False
+    if allowed is not None:
+        return name in allowed
+    return name in WP_SAFE_FLAGS or ("_" in name and re.match(r"^[a-z][a-z0-9_]*$", name) is not None)
 
 
 def wp_command_path(args: Sequence[str]) -> List[str]:
-    """The positional words of a WP-CLI invocation, before its first flag-or-value argument."""
+    """The command words of a WP-CLI invocation (`post meta list`), up to the first argument."""
     words = []
     for arg in args:
         if arg.startswith("-"):
@@ -88,26 +119,40 @@ def wp_command_path(args: Sequence[str]) -> List[str]:
     return words
 
 
+def _read_sql(sql: str) -> bool:
+    body = sql.strip().rstrip(";")
+    return SQL_READ.match(body) is not None and ";" not in body and SQL_WRITES_FILE.search(body) is None
+
+
 def wp_is_read_only(args: Sequence[str]) -> bool:
-    args = [a for a in args if a != "wp"] if args and args[0] == "wp" else list(args)
-    if not args or args in (["--info"], ["--version"]):
+    args = list(args)
+    if args[:1] == ["wp"]:
+        args = args[1:]
+    if not args:
         return True
+    if args in (["--info"], ["--version"]):
+        return True
+    positional = [a for a in args if a == "-" or not a.startswith("-")]
+    flags = [a for a in args if a.startswith("-") and a != "-"]
+    if positional and positional[0].startswith("@"):
+        return False  # an alias: the command runs on whatever site the alias names
     words = wp_command_path(args)
-    flags = [a for a in args if a.startswith("--")]
     if not words:
-        return all(f in ("--info", "--version") for f in flags)
+        return False
     for size in (3, 2, 1):
         if tuple(words[:size]) in WP_CACHE_SAFE:
-            return True
+            return all(_safe_flag(f) for f in flags)
+    if words[:2] == ["db", "query"]:
+        # Every flag is handed to the mysql client (--init-command runs SQL), so none are allowed.
+        return not flags and len(positional) == 3 and _read_sql(positional[2])
+    if words[:2] == ["db", "export"]:
+        # `wp db export -` streams to stdout; a file target writes a dump on the server, and
+        # mysqldump flags such as --result-file write files too.
+        return positional[2:] == ["-"] and all(_safe_flag(f, DUMP_SAFE_FLAGS) for f in flags)
+    if not all(_safe_flag(f) for f in flags):
+        return False
     if words[0] == "search-replace":
         return "--dry-run" in flags
-    if words[:2] == ["db", "query"]:
-        positional = [a for a in args[2:] if not a.startswith("-")]
-        return len(positional) == 1 and SQL_READ.match(positional[0]) is not None and ";" not in positional[0].rstrip().rstrip(";")
-    if words[:2] == ["db", "export"]:
-        # `wp db export -` streams to stdout; any file target writes a dump on the server.
-        rest = [a for a in args[2:] if not a.startswith("--")]
-        return rest == ["-"]
     for size in (2, 1):
         group = tuple(words[:size])
         if group in WP_READ:
@@ -122,92 +167,86 @@ def wp_is_read_only(args: Sequence[str]) -> bool:
     return False
 
 
-# Shell programs that only read, for `wpsite sh`. Each entry may forbid flags that make it write.
+# Programs `wpsite sh` may run without a backup. Each maps to a check of its arguments; programs
+# that can write a file with the right flag (sed, sort, tee, tree, mysql, …) aren't here at all.
+def _no(*bad):
+    return lambda args: not any(a == b or a.startswith(b) for a in args for b in bad)
+
+
+def _only_flags(*allowed):
+    return lambda args: all(a in allowed for a in args if a.startswith("-"))
+
+
 SHELL_READ = {
-    "ls": (), "cat": (), "head": (), "tail": (), "grep": (), "egrep": (), "fgrep": (), "zgrep": (),
-    "stat": (), "file": (), "wc": (), "du": (), "df": (), "md5sum": (), "sha1sum": (), "sha256sum": (),
-    "pwd": (), "echo": (), "printf": (), "date": (), "whoami": (), "id": (), "uname": (), "hostname": (),
-    "test": (), "[": (), "sort": ("-o",), "uniq": (), "cut": (), "tr": (), "zcat": (), "readlink": (),
-    "realpath": (), "basename": (), "dirname": (), "tree": (), "strings": (), "od": (), "hexdump": (),
-    "ps": (), "uptime": (), "free": (), "nproc": (), "which": (), "command": (), "type": (), "true": (),
-    "false": (), "diff": (), "cmp": (), "column": (), "nl": (), "rev": (),
-    "find": ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"),
-    "sed": ("-i", "--in-place"), "gzip": (), "tar": (), "php": (), "wp": (), "mysql": (), "crontab": (),
+    **{p: (lambda args: True) for p in (
+        "ls", "cat", "head", "tail", "grep", "egrep", "fgrep", "zgrep", "stat", "wc", "du", "df", "md5sum",
+        "sha1sum", "sha256sum", "pwd", "echo", "printf", "whoami", "id", "uname", "test", "[", "cut", "tr",
+        "zcat", "readlink", "realpath", "basename", "dirname", "strings", "od", "hexdump", "ps", "uptime",
+        "free", "nproc", "true", "false", "diff", "cmp", "nl", "rev")},
+    "find": _no("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fls"),
+    "file": _no("-C", "--compile"),
+    "date": _no("-s", "--set"),
+    "php": lambda args: bool(args) and _only_flags("-v", "-l", "-m", "-i", "--version", "--ini")(args)
+                        and any(a in ("-v", "-l", "-m", "-i", "--version", "--ini") for a in args),
+    "gzip": lambda args: _only_flags("-l", "-t", "--list", "--test")(args) and any(a.startswith("-") for a in args),
+    "tar": lambda args: _only_flags("-t", "-tf", "-tvf", "-tzf", "-tzvf", "-ztf", "-ztvf", "--list")(args)
+                        and any(a.startswith("-") for a in args),
+    "crontab": lambda args: args == ["-l"],
+    "wp": wp_is_read_only,
 }
-_SHELL_ONLY_WITH = {
-    "gzip": ("-l", "-t", "--list", "--test"),
-    "tar": ("-t", "-tf", "-tzf", "-tvf", "-tzvf", "--list"),
-    "php": ("-v", "-l", "-m", "-i", "--version", "--ini"),
-    "crontab": ("-l",),
-}
-_SAFE_REDIRECT = re.compile(r"^\d?>{1,2}\s*/dev/null$|^\d?>&\d$|^2>&1$")
 
 
-def _split_pipeline(command: str) -> Optional[List[List[str]]]:
-    """Split a shell command into simple commands. None means "too complex to judge"."""
-    if re.search(r"\$\(|`|<<|<\(|>\(", command):
+def _simple_commands(command: str) -> Optional[List[List[str]]]:
+    """Split into simple commands, dropping harmless redirections. None means "can't judge"."""
+    if re.search(r"\$\(|`|\$\{|<\(|>\(", command):
         return None
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
-    lexer.whitespace_split = True
-    try:
-        tokens = list(lexer)
-    except ValueError:
+    tokens = shellwords.tokenize(command)
+    if tokens is None:
         return None
     commands: List[List[str]] = [[]]
-    pending_redirect: Optional[str] = None
-    for token in tokens:
-        if pending_redirect is not None:
-            if not _SAFE_REDIRECT.match(pending_redirect + token):
-                return None
-            pending_redirect = None
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        nxt = tokens[index + 1] if index + 1 < len(tokens) else None
+        if token.isdigit() and nxt in (">", ">>", ">&", "<"):
+            index += 1  # a file-descriptor number before a redirection
             continue
-        if token in (";", "&&", "||", "|", "&", ";;"):
+        if not shellwords.is_operator(token):
+            commands[-1].append(token)
+        elif token in shellwords.SEPARATORS:
             commands.append([])
-            continue
-        if set(token) <= set("<>&") and ">" in token:
-            pending_redirect = token
-            continue
-        if token == "<":
-            pending_redirect = None
-            continue
-        if re.match(r"^\d>$|^\d>>$", token):
-            pending_redirect = token
-            continue
-        commands[-1].append(token)
-    if pending_redirect is not None:
-        return None
+        elif token in (">", ">>", "&>", "&>>"):
+            if nxt != "/dev/null":
+                return None
+            index += 1
+        elif token == ">&":
+            if nxt not in ("1", "2"):
+                return None
+            index += 1
+        elif token == "<":
+            if nxt is None or shellwords.is_operator(nxt):
+                return None
+            index += 1
+        else:
+            return None  # >|, |&, ( ), << and anything else: not something to wave through
+        index += 1
     return [c for c in commands if c]
 
 
 def shell_is_read_only(command: str) -> bool:
-    commands = _split_pipeline(command)
+    commands = _simple_commands(command)
     if commands is None:
         return False
     for words in commands:
-        # Leading `cd somewhere` and VAR=value assignments don't write anything.
-        while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
-            words = words[1:]
-        if not words:
-            continue
-        program = words[0].rsplit("/", 1)[-1]
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+            return False  # VAR=value can change how the next program behaves (WP_CLI_PHP_ARGS, LD_PRELOAD…)
+        program = words[0]
         if program == "cd":
             continue
-        if program not in SHELL_READ:
+        if "/" in program or program not in SHELL_READ:
             return False
-        args = words[1:]
-        if any(a == bad or a.startswith(bad + "=") for a in args for bad in SHELL_READ[program]):
+        if not SHELL_READ[program](words[1:]):
             return False
-        if program == "sed" and any(re.search(r"(^|;)\s*w\s", a) for a in args):
-            return False
-        if program == "wp" and not wp_is_read_only(args):
-            return False
-        if program == "mysql":
-            sql = " ".join(a for a in args if not a.startswith("-"))
-            if not SQL_READ.match(sql or ""):
-                return False
-        if program in _SHELL_ONLY_WITH:
-            if not args or not any(a in _SHELL_ONLY_WITH[program] for a in args):
-                return False
     return True
 
 

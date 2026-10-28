@@ -15,14 +15,16 @@ terminal prompt.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import IO, List, Optional, Sequence
 
-from . import PLUGIN_ROOT, redact
+from . import PLUGIN_ROOT, envfile, redact
 from .sites import Site
 
 ASKPASS = PLUGIN_ROOT / "lib" / "wpstudio" / "askpass.sh"
@@ -177,14 +179,55 @@ def run(site: Site, command: str, stdin: Optional[IO[bytes]] = None, stdout: Opt
     return proc
 
 
-def secret_literals(site: Site) -> List[str]:
-    return [site.values[k] for k in ("SSH_PASSWORD",) if site.values.get(k)]
+SERVER_SECRETS_MAX_AGE = 24 * 60 * 60
+SERVER_SECRETS_COMMAND = "wp config list --format=json --skip-plugins --skip-themes"
+
+
+def server_secrets(site: Site, refresh: bool = False) -> List[str]:
+    """The site's own secret values (database password, keys and salts), read from wp-config.php.
+
+    Redaction by output shape can't cover every way a value can be printed (`cut -d"'" -f4`, YAML,
+    a define() split over two lines), so wpsite learns the actual values once a day and masks them
+    wherever they appear. They're kept beside the site's connection file, in the secrets store,
+    and the commit scan refuses them too.
+    """
+    cache = site.server_secrets_file
+    if not refresh and cache.is_file():
+        try:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            if time.time() - float(data.get("fetched", 0)) < SERVER_SECRETS_MAX_AGE:
+                return list(data.get("values", []))
+        except (OSError, ValueError):
+            pass
+    proc = run(site, SERVER_SECRETS_COMMAND)
+    try:
+        rows = json.loads(proc.stdout.decode("utf-8", "replace") or "[]") if proc.returncode == 0 else None
+    except ValueError:
+        rows = None
+    if not isinstance(rows, list):
+        return []  # no readable wp-config.php here; shape-based redaction still applies
+    values = sorted({str(r.get("value", "")) for r in rows if isinstance(r, dict)
+                     and str(r.get("name", "")).upper() in redact.SECRET_CONSTANTS and len(str(r.get("value", ""))) >= 4})
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(cache), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"fetched": time.time(), "values": values}, handle)
+    return values
+
+
+def secret_literals(site: Site, fetch: bool = True) -> List[str]:
+    """Every value to mask in this site's output: everything secret in its connection file, plus
+    the server's own secrets."""
+    values = envfile.secret_values(site.values)
+    if fetch and site.values.get("WP_PATH"):
+        values += server_secrets(site)
+    return sorted(set(values), key=len, reverse=True)
 
 
 def run_text(site: Site, command: str, in_wp_root: bool = True, stdin: Optional[IO[bytes]] = None):
     """Run and return (exit code, stdout text, stderr text), both redacted."""
-    proc = run(site, command, stdin=stdin, in_wp_root=in_wp_root)
     literals = secret_literals(site)
+    proc = run(site, command, stdin=stdin, in_wp_root=in_wp_root)
     out = redact.redact_text(proc.stdout.decode("utf-8", "replace"), literals)
     err = redact.redact_text(proc.stderr.decode("utf-8", "replace"), literals)
     return proc.returncode, out, err

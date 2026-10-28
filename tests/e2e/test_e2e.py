@@ -48,7 +48,7 @@ def ws(server, tmp_path_factory):
     (root / ".wp-studio").write_text("e2e\n")
     subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
     env = dict(os.environ, WPSTUDIO_KNOWN_HOSTS=str(base / "known_hosts"), WPSTUDIO_CONTROL_DIR=str(base / "cm"),
-               WPSTUDIO_KEY=str(base / "key"))
+               WPSTUDIO_KEY=str(base / "key"), WPSTUDIO_SECRETS_HOME=str(base / "secrets"))
     run = lambda *a, **kw: wpsite(root, env, *a, **kw)
     subprocess.run([sys.executable, str(PLUGIN / "bin" / "studio"), "sync"], cwd=str(root), check=True, capture_output=True)
     run("init", "e2e", "--url", SITE)
@@ -80,9 +80,19 @@ def test_check_reports_the_real_site(ws):
     assert "Home URL: %s" % SITE in result.stdout
 
 
-def test_changes_need_a_backup_and_backups_are_verified(ws):
+def test_changes_need_a_backup_and_backups_are_verified(ws, tmp_path):
     run, root, _ = ws
     assert run("wp", "e2e", "option", "update", "blogdescription", "Before backup").returncode == 3
+    # Review round 1: these changed the site through read-looking commands. Now they need a backup.
+    exec_flag = "--exec=WP_CLI::add_hook('after_wp_load', function(){ update_option('blogname','pwned-exec'); });"
+    assert run("wp", "e2e", "option", "get", "home", exec_flag).returncode == 3
+    assert run("wp", "e2e", "db", "query", "SELECT 1",
+               "--init-command=UPDATE wp_options SET option_value='pwned' WHERE option_name='blogname'").returncode == 3
+    assert run("sh", "e2e", "ls >/dev/null\nwp option update blogname pwned-newline").returncode == 3
+    php = tmp_path / "x.php"
+    php.write_text("<?php\n")
+    assert run("deploy", "e2e", str(php), "wp-content/mu-plugins/x.php").returncode == 3
+    assert "pwned" not in run("wp", "e2e", "option", "get", "blogname").stdout
     result = run("backup", "e2e")
     assert result.returncode == 0, result.stderr
     assert "Database backup verified" in result.stdout
@@ -93,6 +103,10 @@ def test_changes_need_a_backup_and_backups_are_verified(ws):
 def test_database_password_never_reaches_the_output(ws):
     run, root, _ = ws
     out = run("sh", "e2e", "grep DB_PASSWORD wp-config.php").stdout + run("wp", "e2e", "config", "list").stdout
+    # Review round 1: shapes the pattern-based redaction missed. Values are now masked by value.
+    out += run("sh", "e2e", "grep DB_PASSWORD wp-config.php | cut -d\"'\" -f4").stdout
+    out += run("wp", "e2e", "config", "list", "DB_PASSWORD", "--fields=value").stdout
+    out += run("wp", "e2e", "config", "list", "--format=yaml").stdout
     assert DB_PASSWORD not in out
     assert "[redacted]" in out
 

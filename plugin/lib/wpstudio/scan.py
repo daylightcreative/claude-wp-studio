@@ -2,7 +2,7 @@
 
 Three checks over the staged files:
 1. Literal values: every secret the studio actually holds (SSH passwords and other filed values
-   from projects/*/.secrets/*.env) is searched for verbatim. This is the precise check: it catches
+   in the secrets store, plus the database password, keys and salts wpsite learned from each site) is searched for verbatim. This is the precise check: it catches
    a real password copied into a note, whatever the surrounding text looks like.
 2. Patterns: private keys, wp-config secrets, well-known token formats, WordPress application
    passwords.
@@ -20,11 +20,10 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Iterable, List, Sequence, Tuple
 
-from . import envfile
+from . import envfile, workspace
 
 MAX_FILE_BYTES = 50 * 1024 * 1024
 SCAN_BYTES = 5 * 1024 * 1024
-NON_SECRET_KEYS = {"SITE_URL", "SSH_HOST", "SSH_PORT", "SSH_USER", "WP_PATH", "HOST", "SSH_KEY"}
 
 PATTERNS: Sequence[Tuple[str, "re.Pattern[str]"]] = (
     ("a private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
@@ -63,14 +62,22 @@ class Finding:
 
 
 def known_secrets(root: Path) -> List[str]:
+    """Every secret value the studio holds: filed connection details and the server secrets
+    (database password, keys, salts) that wpsite learned for redaction."""
+    import json
     values = []
-    for env in (root / "projects").glob("*/.secrets/*.env"):
+    store = workspace.secrets_dir(root)
+    for env in store.glob("*/*.env"):
         try:
-            data = envfile.read(env)
+            values.extend(envfile.secret_values(envfile.read(env)))
         except (OSError, UnicodeDecodeError):
             continue
-        values.extend(v for k, v in data.items() if k not in NON_SECRET_KEYS and len(v) >= 6)
-    return sorted(set(values), key=len, reverse=True)
+    for cache in store.glob("*/*.server.json"):
+        try:
+            values.extend(json.loads(cache.read_text(encoding="utf-8")).get("values", []))
+        except (OSError, ValueError):
+            continue
+    return sorted({v for v in values if len(v) >= 6}, key=len, reverse=True)
 
 
 def scan_text(path: str, text: str, secrets: Sequence[str]) -> List[Finding]:

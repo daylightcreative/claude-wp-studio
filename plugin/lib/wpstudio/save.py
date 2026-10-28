@@ -30,7 +30,9 @@ def git_dir(root: Path) -> Path:
 
 
 def ensure_repo(root: Path) -> None:
-    if git(root, "rev-parse", "--is-inside-work-tree").returncode != 0:
+    # The studio is its own repository, even inside another one: never commit a parent repo's files.
+    top = git(root, "rev-parse", "--show-toplevel")
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root.resolve():
         git(root, "init", "-b", "main", check=True)
     if not git(root, "config", "user.email").stdout.strip():
         git(root, "config", "user.email", "wp-studio@localhost")
@@ -50,8 +52,8 @@ def commit(root: Path, message: Optional[str]) -> int:
         print("Not saved: these would put a secret or a site's private data into the backup:")
         for finding in findings:
             print("  " + str(finding))
-        print("Move the secret out (secrets live only in projects/<site>/.secrets/ via `wpsite secrets file`), "
-              "then save again.")
+        print("Take the secret out of that file (site logins belong only in the drop box, filed with "
+              "`wpsite secrets file`), then save again.")
         return 1
     message = message or "Studio update %s" % dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     result = git(root, "commit", "-q", "-m", message)

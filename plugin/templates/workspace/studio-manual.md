@@ -63,11 +63,14 @@ A site is `<name>` for the live site or `<name>:staging` (any environment name) 
 - Secrets never go in the chat, a doc or git. When you need a login, ask the operator to fill in
   the labeled lines in **`CREDENTIALS.txt`** (the drop box) and tell you which site it's for.
 - Then run `wpsite secrets file <site>`. It files the details into the site's private
-  `.secrets` folder, prints only the field names, and clears the drop box. Tell the operator:
+  secrets store (outside the studio folder), prints only the field names, and clears the drop box.
+  Tell the operator:
   "Got it: saved securely and the drop box is clear."
-- You never read `CREDENTIALS.txt` or anything in `.secrets/`; the studio blocks it. Use
+- You never read `CREDENTIALS.txt`, the secrets store or the studio's SSH key; the studio blocks
+  them. Use
   `wpsite secrets status <site>` to see which fields a site has.
-- `wpsite` hides database passwords and WordPress keys in anything it prints.
+- `wpsite` hides database passwords, WordPress keys and the site's own login in anything it
+  prints, and it needs a fresh backup before a deploy as well as before any other change.
 
 ## Saving and backup
 

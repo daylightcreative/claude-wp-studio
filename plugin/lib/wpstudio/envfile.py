@@ -1,4 +1,4 @@
-"""Read and write a site's connection file (`projects/<slug>/.secrets/<env>.env`).
+"""Read and write a site's connection file (in the secrets store: see workspace.secrets_dir).
 
 Format: one `KEY='value'` per line, single-quoted with shell-style escaping of embedded quotes, so
 the file is also safe to `source` from a shell. `#` lines are comments. Unquoted legacy values
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import tempfile
 from pathlib import Path
 from typing import Dict
@@ -30,17 +31,22 @@ KNOWN_KEYS = (
     "HOST",
 )
 
-SECRET_KEYS = frozenset({"SSH_PASSWORD"})
+# Everything else a site file holds (the SSH password, extra values the operator filed) is secret.
+NON_SECRET_KEYS = frozenset({"SITE_URL", "SSH_HOST", "SSH_PORT", "SSH_USER", "WP_PATH", "HOST", "SSH_KEY"})
+
+
+def secret_values(values: Dict[str, str]) -> list:
+    return [v for k, v in values.items() if k not in NON_SECRET_KEYS and len(v) >= 4]
 
 
 def _unquote(raw: str) -> str:
-    raw = raw.strip()
-    if len(raw) >= 2 and raw[0] == raw[-1] == "'":
-        return raw[1:-1].replace("'\\''", "'")
-    if len(raw) >= 2 and raw[0] == raw[-1] == '"':
-        inner = raw[1:-1]
-        return re.sub(r'\\(["\\$`])', r"\1", inner)
-    return raw
+    """A value with shell rules: quotes removed, a trailing `# comment` dropped. v1 files were read
+    with `source`, so lines like `SSH_PORT='22'   # custom port` are valid and mean 22."""
+    try:
+        words = shlex.split(raw, comments=True, posix=True)
+    except ValueError:
+        return raw.strip()
+    return " ".join(words)
 
 
 def _quote(value: str) -> str:
@@ -59,9 +65,6 @@ def read(path: Path) -> Dict[str, str]:
         key = key.strip()
         if not sep or not KEY_RE.match(key):
             continue
-        # Drop a trailing comment only when the value is unquoted.
-        if raw and raw.lstrip()[:1] not in ("'", '"') and " #" in raw:
-            raw = raw.split(" #", 1)[0]
         values[key] = _unquote(raw)
     return values
 
