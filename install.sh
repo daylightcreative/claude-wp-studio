@@ -1,277 +1,219 @@
 #!/usr/bin/env bash
 #
-#   Claude WP Studio — installer
+#   Claude WP Studio — installer (macOS)
 #   https://github.com/daylightcreative/claude-wp-studio
 #
-#   One-line install:
 #       curl -fsSL https://get.daylightcreative.tech/wp-studio | bash
 #
-#   What it does (macOS):
-#     1. Installs the prerequisites (Xcode CLT, Homebrew, a MODERN Python, WordPress tooling)
-#     2. Installs the latest Claude Code (native installer — auto-updates over time)
-#     3. Lays down the studio (knowledge library, tooling, standards) in a folder you choose
-#     4. Writes the Claude Code defaults: xhigh reasoning effort + the launcher's bypass mode
-#     5. Optionally connects a private GitHub backup (your own account)
-#     6. Hands off to Claude's login so you can connect your subscription or API key
+#   What it does:
+#     1. Installs what the studio needs: Apple's Command Line Tools, Homebrew, Node, the GitHub CLI,
+#        ImageMagick and Claude Code. (Nothing WordPress-specific runs on the Mac: WP-CLI runs on
+#        your web host.)
+#     2. Creates your studio folder (or upgrades an existing one, including a v1 studio).
+#     3. Installs the wp-studio plugin into it, plus the browser the studio uses to look at pages.
+#     4. Optionally links a private GitHub repository on your own account as the backup.
 #
-#   Flags / env (for unattended / agent-driven installs):
-#     --unattended            accept all defaults, no prompts
-#     --dir <path>            install location (default: ~/claude-wp-studio)
-#     --no-backup             skip the GitHub backup step
-#     --owner <gh-owner>      source GitHub owner (default below)
-#     CLAUDE_WP_STUDIO_DIR    same as --dir
-#     CLAUDE_WP_STUDIO_OWNER  same as --owner
+#   Options:
+#     --dir <path>        where the studio lives (default: ~/claude-wp-studio)
+#     --no-backup         skip the GitHub backup step
+#     --unattended        accept every default, ask nothing (needs sudo already authorized
+#                         if Homebrew isn't installed yet)
+#     --source <src>      plugin marketplace: owner/repo on GitHub (default) or a local folder
 #
-set -uo pipefail
+set -euo pipefail
 
-# ─── Config ──────────────────────────────────────────────────────────────────
-GH_OWNER="${CLAUDE_WP_STUDIO_OWNER:-daylightcreative}"   # published source GitHub owner
-REPO_NAME="claude-wp-studio"
+SOURCE="${CLAUDE_WP_STUDIO_SOURCE:-daylightcreative/claude-wp-studio}"
+STUDIO_DIR="${CLAUDE_WP_STUDIO_DIR:-}"
 DEFAULT_DIR="$HOME/claude-wp-studio"
-LOG="$HOME/.claude-wp-studio-install.log"
-
 UNATTENDED=0
 NO_BACKUP=0
-STUDIO_DIR="${CLAUDE_WP_STUDIO_DIR:-}"
+LOG="$HOME/.claude-wp-studio-install.log"
 
-# ─── Args ────────────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
   case "$1" in
     --unattended) UNATTENDED=1 ;;
     --no-backup)  NO_BACKUP=1 ;;
-    --dir)        STUDIO_DIR="${2:-}"; shift ;;
-    --owner)      GH_OWNER="${2:-}"; shift ;;
-    -h|--help)    grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "Unknown option: $1" ;;
+    --dir)        STUDIO_DIR="${2:?--dir needs a path}"; shift ;;
+    --source)     SOURCE="${2:?--source needs a value}"; shift ;;
+    -h|--help)    sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Unknown option: $1 (try --help)"; exit 2 ;;
   esac
   shift
 done
 
-TARBALL_URL="https://github.com/${GH_OWNER}/${REPO_NAME}/archive/refs/heads/main.tar.gz"
-
-# ─── Output helpers ──────────────────────────────────────────────────────────
 BOLD=$'\033[1m'; DIM=$'\033[2m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'; RESET=$'\033[0m'
-say()  { printf '%s\n' "$*"; printf '%s\n' "$(date '+%F %T') $*" >> "$LOG" 2>/dev/null || true; }
-step() { printf '\n%s▸ %s%s\n' "$BOLD" "$*" "$RESET"; printf '%s\n' "$(date '+%F %T') STEP: $*" >> "$LOG" 2>/dev/null || true; }
-ok()   { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$*"; }
-warn() { printf '  %s!%s %s\n' "$YELLOW" "$RESET" "$*"; }
-die()  { printf '\n%sInstall stopped:%s %s\n' "$RED" "$RESET" "$*"; exit 1; }
+: > "$LOG"
+log()  { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
+step() { printf '\n%s▸ %s%s\n' "$BOLD" "$*" "$RESET"; log "STEP $*"; }
+ok()   { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$*"; log "ok $*"; }
+warn() { printf '  %s!%s %s\n' "$YELLOW" "$RESET" "$*"; log "warn $*"; }
+die()  { printf '\n%sInstall stopped:%s %s\n  Details: %s\n' "$RED" "$RESET" "$*" "$LOG"; log "die $*"; exit 1; }
+run()  { log "run $*"; "$@" >> "$LOG" 2>&1; }
 
-# Read a prompt from the real terminal even when piped via `curl | bash`.
-ask() { # ask "Question" "default" -> echoes answer
-  local q="$1" def="${2:-}" ans=""
-  if [ "$UNATTENDED" = "1" ] || [ ! -r /dev/tty ]; then printf '%s' "$def"; return; fi
-  printf '%s%s%s ' "$BOLD" "$q" "$RESET" > /dev/tty
-  [ -n "$def" ] && printf '%s[%s]%s ' "$DIM" "$def" "$RESET" > /dev/tty
-  read -r ans < /dev/tty || ans=""
-  printf '%s' "${ans:-$def}"
+interactive() { [ "$UNATTENDED" = 0 ] && [ -r /dev/tty ]; }
+ask() { # ask "Question" "default"
+  local answer=""
+  if ! interactive; then printf '%s' "$2"; return; fi
+  printf '%s%s%s %s[%s]%s ' "$BOLD" "$1" "$RESET" "$DIM" "$2" "$RESET" > /dev/tty
+  read -r answer < /dev/tty || answer=""
+  printf '%s' "${answer:-$2}"
 }
-confirm() { # confirm "Question" -> returns 0 (yes) / 1 (no); defaults to yes
-  local a; a="$(ask "$1 (Y/n)" "Y")"
-  case "$a" in [nN]|[nN][oO]) return 1 ;; *) return 0 ;; esac
-}
+confirm() { case "$(ask "$1 (Y/n)" "Y")" in [nN]*) return 1 ;; *) return 0 ;; esac; }
 
-# ─── Banner ──────────────────────────────────────────────────────────────────
-printf '\n%s┌────────────────────────────────────────────┐%s\n' "$BOLD" "$RESET"
-printf '%s│           Claude WP Studio — install         │%s\n' "$BOLD" "$RESET"
-printf '%s└────────────────────────────────────────────┘%s\n' "$BOLD" "$RESET"
-say "A ready-to-work WordPress studio for Claude Code."
-say "Log: $LOG"
-: > "$LOG" 2>/dev/null || true
+printf '\n%sClaude WP Studio%s — install\n' "$BOLD" "$RESET"
+printf '%sLog: %s%s\n' "$DIM" "$LOG" "$RESET"
 
-# ─── 1. Preflight ────────────────────────────────────────────────────────────
-step "Checking your system"
-[ "$(uname -s)" = "Darwin" ] || die "This installer currently supports macOS only."
-ARCH="$(uname -m)"
-ok "macOS on $ARCH"
+# ── 1. This Mac ─────────────────────────────────────────────────────────────────────────────────
+step "Checking this Mac"
+[ "$(uname -s)" = "Darwin" ] || die "This installer supports macOS only."
+[ "$(id -u)" != 0 ] || die "Run the installer as yourself, not with sudo."
+ok "macOS $(sw_vers -productVersion) on $(uname -m)"
 
-# ─── 2. Xcode Command Line Tools (provides git) ──────────────────────────────
-step "Command Line Tools"
+step "Apple Command Line Tools"
 if xcode-select -p >/dev/null 2>&1; then
   ok "already installed"
 else
-  warn "installing Xcode Command Line Tools — a system dialog will appear; click Install"
+  warn "a system dialog will appear: click Install, then wait for it to finish"
   xcode-select --install >/dev/null 2>&1 || true
-  say "  Waiting for Command Line Tools to finish installing…"
   until xcode-select -p >/dev/null 2>&1; do sleep 10; done
   ok "installed"
 fi
 
-# ─── 3. Homebrew ─────────────────────────────────────────────────────────────
+# ── 2. Homebrew ─────────────────────────────────────────────────────────────────────────────────
 step "Homebrew"
-if ! command -v brew >/dev/null 2>&1; then
-  warn "installing Homebrew…"
-  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
-    >>"$LOG" 2>&1 || die "Homebrew install failed (see $LOG)."
+for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+  [ -x "$candidate" ] && BREW="$candidate" && break
+done
+if [ -z "${BREW:-}" ]; then
+  # Homebrew needs an administrator password once, to create its folder. Its installer can't ask
+  # for it when run unattended, so ask here and keep the authorization alive while it runs.
+  if interactive; then
+    echo "  Homebrew needs your Mac's password once (the one you log in with). Nothing is shown as you type."
+    # shellcheck disable=SC2024  # the redirect is for sudo itself: it reads the password from the terminal
+    sudo -v < /dev/tty || die "Homebrew needs an administrator account on this Mac."
+  elif ! sudo -n true 2>/dev/null; then
+    die "Homebrew isn't installed and --unattended can't ask for the administrator password. Run 'sudo -v' first, or install without --unattended."
+  fi
+  ( while sudo -n true 2>/dev/null; do sleep 50; kill -0 "$$" 2>/dev/null || exit; done ) &
+  KEEPALIVE=$!
+  NONINTERACTIVE=1 run /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+    || { kill "$KEEPALIVE" 2>/dev/null; die "Homebrew didn't install."; }
+  kill "$KEEPALIVE" 2>/dev/null || true
+  for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    [ -x "$candidate" ] && BREW="$candidate" && break
+  done
+  [ -n "${BREW:-}" ] || die "Homebrew isn't where it should be after installing."
 fi
-# Put brew on PATH for this session (and persist for new shells).
-if [ -x /opt/homebrew/bin/brew ]; then BREW=/opt/homebrew/bin/brew
-elif [ -x /usr/local/bin/brew ]; then BREW=/usr/local/bin/brew
-else die "Homebrew not found after install."; fi
 eval "$("$BREW" shellenv)"
-if ! grep -q 'brew shellenv' "$HOME/.zprofile" 2>/dev/null; then
-  printf '\neval "$(%s shellenv)"\n' "$BREW" >> "$HOME/.zprofile"
-fi
-ok "Homebrew ready ($("$BREW" --version | head -1))"
+# shellcheck disable=SC2016  # written literally: new shells evaluate it
+grep -q 'brew shellenv' "$HOME/.zprofile" 2>/dev/null || printf '\neval "$(%s shellenv)"\n' "$BREW" >> "$HOME/.zprofile"
+ok "$("$BREW" --version | head -1)"
 
-# ─── 4. Modern Python (NOT macOS system Python) ──────────────────────────────
-step "Python (modern, via Homebrew)"
-brew list python >/dev/null 2>&1 || brew install python >>"$LOG" 2>&1 || warn "python install reported an issue (see $LOG)"
-hash -r
-if python3 -c "import sqlite3" >/dev/null 2>&1; then
-  ok "python3 $(python3 --version 2>&1 | awk '{print $2}') with sqlite3 ✓  ($(command -v python3))"
-else
-  die "A working python3 with sqlite3 is required (see $LOG)."
-fi
-
-# ─── 5. WordPress + dev tooling ──────────────────────────────────────────────
-step "WordPress + dev tooling"
-for f in wp-cli imagemagick mysql-client gh rsync git node; do
-  if brew list "$f" >/dev/null 2>&1; then
-    ok "$f"
-  else
-    say "  installing $f…"
-    brew install "$f" >>"$LOG" 2>&1 && ok "$f" || warn "$f install reported an issue (see $LOG)"
+step "Tools"
+for formula in node gh imagemagick; do
+  if ! brew list --formula "$formula" >/dev/null 2>&1; then
+    run brew install "$formula" || die "Couldn't install $formula."
   fi
+  ok "$formula"
 done
 
-# ─── 5b. Browser engine for visual verification (Playwright MCP) ─────────────
-# The studio ships a project .mcp.json + an enabledMcpjsonServers pre-approval so Claude can
-# view/snapshot/screenshot sites in a real browser by default. Provision the browser now so
-# the MCP works on first use without a download stall.
-step "Browser engine (Playwright)"
-if command -v npx >/dev/null 2>&1; then
-  say "  downloading the Chromium browser Claude uses to view pages (~150 MB, one time)…"
-  npx -y playwright install chromium >>"$LOG" 2>&1 && ok "Chromium installed" || warn "Playwright browser install hit an issue (see $LOG) — Claude can retry on first use"
-  npx -y @playwright/mcp@latest --version >>"$LOG" 2>&1 && ok "Playwright MCP ready (npm cached)" || warn "Playwright MCP warm-up hit an issue (see $LOG)"
-else
-  warn "node/npx not found — skipping browser setup; it'll be set up on first use"
-fi
-
-# ─── 6. Claude Code (latest; native installer auto-updates) ───────────────────
+# ── 3. Claude Code ──────────────────────────────────────────────────────────────────────────────
 step "Claude Code"
+export PATH="$HOME/.local/bin:$PATH"
 if command -v claude >/dev/null 2>&1; then
-  ok "already installed — updating"
-  claude update >>"$LOG" 2>&1 || true
+  run claude update || true
+  ok "$(claude --version 2>/dev/null | head -1)"
 else
-  warn "installing Claude Code…"
-  curl -fsSL https://claude.ai/install.sh | bash >>"$LOG" 2>&1 || warn "Claude Code installer reported an issue (see $LOG)"
+  run bash -c "curl -fsSL https://claude.ai/install.sh | bash" || die "Claude Code didn't install."
+  hash -r
+  command -v claude >/dev/null 2>&1 || die "Claude Code installed but isn't on PATH. Open a new Terminal window and run the installer again."
+  ok "$(claude --version 2>/dev/null | head -1)"
 fi
-# Make sure it's on PATH for the rest of this run.
-for d in "$HOME/.local/bin" "$HOME/.claude/bin" "$BREW/bin"; do
-  [ -d "$d" ] && case ":$PATH:" in *":$d:"*) ;; *) PATH="$d:$PATH" ;; esac
-done
-hash -r
-if command -v claude >/dev/null 2>&1; then ok "claude on PATH ($(command -v claude))"; else warn "claude not on PATH yet — a new Terminal window will pick it up"; fi
 
-# ─── 7. Choose where the studio lives ────────────────────────────────────────
-step "Studio location"
+# ── 4. The studio folder ────────────────────────────────────────────────────────────────────────
+step "Your studio folder"
 [ -n "$STUDIO_DIR" ] || STUDIO_DIR="$(ask "Where should the studio live?" "$DEFAULT_DIR")"
-# Expand a leading ~
-case "$STUDIO_DIR" in "~"*) STUDIO_DIR="${HOME}${STUDIO_DIR#\~}" ;; esac
+case "$STUDIO_DIR" in "~"*) STUDIO_DIR="$HOME${STUDIO_DIR#\~}" ;; esac
+mkdir -p "$STUDIO_DIR"
+STUDIO_DIR="$(cd "$STUDIO_DIR" && pwd)"
 ok "$STUDIO_DIR"
+cd "$STUDIO_DIR"
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || run git init -b main
 
-# ─── 8. Fetch the studio ─────────────────────────────────────────────────────
-step "Laying down the studio"
-SELF_SRC="${BASH_SOURCE[0]:-$0}"
-LOCAL_KIT=""
-if [ -f "$SELF_SRC" ]; then
-  SELF_DIR="$(cd "$(dirname "$SELF_SRC")" && pwd)"
-  [ -f "$SELF_DIR/CLAUDE.md" ] && [ -d "$SELF_DIR/library" ] && LOCAL_KIT="$SELF_DIR"
-fi
-
-if [ -f "$STUDIO_DIR/CLAUDE.md" ]; then
-  ok "studio already present — refreshing in place"
-elif [ -n "$LOCAL_KIT" ]; then
-  mkdir -p "$STUDIO_DIR"
-  rsync -a --exclude '.git' --exclude 'library/catalog.db' "$LOCAL_KIT"/ "$STUDIO_DIR"/ >>"$LOG" 2>&1
-  ok "copied from local checkout"
+# ── 5. The plugin ───────────────────────────────────────────────────────────────────────────────
+step "The wp-studio plugin"
+if [ -d "$SOURCE" ]; then
+  SOURCE="$(cd "$SOURCE" && pwd)"
+  SCOPE=local      # a development checkout: keep its path out of the shared settings file
 else
-  TMP="$(mktemp -d)"
-  say "  downloading from $TARBALL_URL"
-  if curl -fsSL "$TARBALL_URL" | tar -xz -C "$TMP" >>"$LOG" 2>&1; then
-    SRC="$(find "$TMP" -maxdepth 1 -type d -name "${REPO_NAME}*" | head -1)"
-    [ -n "$SRC" ] || die "Could not unpack the download (see $LOG)."
-    mkdir -p "$STUDIO_DIR"
-    rsync -a --exclude '.git' "$SRC"/ "$STUDIO_DIR"/ >>"$LOG" 2>&1
-    rm -rf "$TMP"
-    ok "downloaded and unpacked"
-  else
-    die "Download failed. Check the repo owner (--owner) and your connection (see $LOG)."
-  fi
+  SCOPE=project
 fi
+run claude plugin marketplace add "$SOURCE" --scope "$SCOPE" || die "Couldn't add the plugin marketplace ($SOURCE)."
+run claude plugin marketplace update daylight || true
+if ! run claude plugin install wp-studio@daylight --scope "$SCOPE"; then
+  run claude plugin update wp-studio@daylight --scope "$SCOPE" || die "Couldn't install the wp-studio plugin."
+fi
+PLUGIN_ROOT="$(claude plugin list --json 2>>"$LOG" | /usr/bin/python3 -c '
+import json, sys
+for p in json.load(sys.stdin):
+    if p.get("id") == "wp-studio@daylight":
+        print(p.get("readFromFolder") or p.get("installPath")); break
+')"
+[ -n "$PLUGIN_ROOT" ] && [ -x "$PLUGIN_ROOT/bin/studio" ] || die "The plugin installed, but its files weren't found."
+STUDIO=("/usr/bin/python3" "$PLUGIN_ROOT/bin/studio")
+ok "wp-studio $("${STUDIO[@]}" --version | awk '{print $2}')"
 
-cd "$STUDIO_DIR" || die "Cannot enter $STUDIO_DIR"
-chmod +x studio.sh tooling/*.sh tooling/catalog.py tooling/templates/*.sh 2>/dev/null || true
+MIGRATION="$("${STUDIO[@]}" migrate-v1 "$STUDIO_DIR")" || die "Upgrading the v1 studio failed."
+log "$MIGRATION"
+if printf '%s\n' "$MIGRATION" | grep -q '^- '; then
+  ok "upgraded your v1 studio; nothing of yours was deleted:"
+  printf '%s\n' "$MIGRATION" | sed 's/^/      /'
+fi
+touch .wp-studio
+run "${STUDIO[@]}" sync
+ok "studio files in place"
 
-# Create the live credential drop box from the shipped template (git-ignored, so it isn't
-# in the download). Never overwrite an existing one.
-[ -f CREDENTIALS.txt ] || { [ -f CREDENTIALS.txt.template ] && cp CREDENTIALS.txt.template CREDENTIALS.txt; }
-
-# ─── 9. Make it a git repo (the operator's own) ──────────────────────────────
-step "Version control"
-if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  ok "already a git repo"
+# ── 6. The browser the studio looks at pages with ───────────────────────────────────────────────
+step "Browser for checking pages"
+MCP_VERSION="$("${STUDIO[@]}" mcp-version)"
+if run npx -y "@playwright/mcp@$MCP_VERSION" install-browser chrome-for-testing; then
+  ok "installed (Playwright MCP $MCP_VERSION)"
 else
-  git init -b main >>"$LOG" 2>&1 || git init >>"$LOG" 2>&1
-  ok "initialized a local repo"
+  warn "the browser didn't download; Claude can retry later with: npx -y @playwright/mcp@$MCP_VERSION install-browser chrome-for-testing"
 fi
 
-# ─── 10. Build the knowledge catalog ─────────────────────────────────────────
-step "Building the knowledge catalog"
-if python3 tooling/catalog.py build >>"$LOG" 2>&1; then
-  ok "$(python3 tooling/catalog.py categories 2>/dev/null | tr '\n' ' ' || echo 'built')"
+# ── 7. Backup ───────────────────────────────────────────────────────────────────────────────────
+step "Backup"
+run "${STUDIO[@]}" save "Set up Claude WP Studio" || die "The first save failed."
+if git remote get-url origin >/dev/null 2>&1; then
+  ok "already backed up to $(git remote get-url origin)"
+elif [ "$NO_BACKUP" = 1 ] || ! confirm "Back up your studio to a private GitHub repository on your own account?"; then
+  warn "saving on this Mac only. To add a GitHub backup later, ask Claude: \"set up my GitHub backup\"."
 else
-  warn "catalog build reported an issue (see $LOG) — you can rebuild later with: python3 tooling/catalog.py build"
-fi
-
-# ─── 11. Optional private GitHub backup (the operator's own account) ──────────
-step "Private cloud backup (optional)"
-if [ "$NO_BACKUP" = "1" ]; then
-  warn "skipped (--no-backup). Your work still saves locally."
-  tooling/save.sh "Initial studio" >>"$LOG" 2>&1 || true
-elif confirm "Back up your work to a private GitHub repo on your own account?"; then
-  if ! gh auth status >/dev/null 2>&1; then
-    say "  Opening GitHub sign-in (one-time)…"
-    gh auth login || warn "GitHub sign-in didn't complete — saving locally for now"
-  fi
-  tooling/save.sh "Initial studio" >>"$LOG" 2>&1 || true
-  if gh auth status >/dev/null 2>&1 && ! git remote get-url origin >/dev/null 2>&1; then
-    if gh repo create "$REPO_NAME" --private --source=. --remote=origin --push >>"$LOG" 2>&1; then
-      ok "private backup repo created and pushed"
+  gh auth status >/dev/null 2>&1 || gh auth login --hostname github.com --git-protocol https --web < /dev/tty || true
+  if gh auth status >/dev/null 2>&1; then
+    gh auth setup-git >> "$LOG" 2>&1 || true
+    if run gh repo create "$(basename "$STUDIO_DIR")" --private --source . --remote origin --push; then
+      ok "backed up to a private repository on your GitHub account"
     else
-      warn "couldn't create the backup repo automatically (it may already exist). Your work is saved locally; see guides/04_git_and_backup.md"
+      warn "couldn't create the repository (one with that name may exist). Ask Claude to finish the backup setup."
     fi
+  else
+    warn "GitHub sign-in didn't finish. Ask Claude to set up the backup later."
   fi
-else
-  warn "no cloud backup — your work still saves locally"
-  tooling/save.sh "Initial studio" >>"$LOG" 2>&1 || true
 fi
 
-# ─── 12. Done — hand off to login ────────────────────────────────────────────
-step "All set"
+# ── Done ────────────────────────────────────────────────────────────────────────────────────────
 cat <<EOF
 
-  ${GREEN}${BOLD}Claude WP Studio is installed.${RESET}
+  ${GREEN}${BOLD}Claude WP Studio is ready.${RESET}
 
-  Your studio:   ${BOLD}$STUDIO_DIR${RESET}
+  Start it:   ${BOLD}cd "$STUDIO_DIR" && ./studio.sh${RESET}
 
-  To start (and log in to Claude the first time):
-
-      ${BOLD}cd "$STUDIO_DIR" && ./studio.sh${RESET}
-
-  On first launch Claude will:
-    • ask you to log in (your Claude subscription or an API key), then
-    • set up the rest of the studio itself — just say: ${BOLD}Read START_HERE.md and follow it.${RESET}
-
-  Day to day: open the folder, run ${BOLD}./studio.sh${RESET}, and tell Claude what you'd like to do.
-  New here? Read ${BOLD}GETTING_STARTED.md${RESET}.
+  The first time, Claude Code asks you to log in and to trust the folder. Then just say what you
+  want, for example: ${BOLD}"Set up my first site: acme.com, hosted on Kinsta."${RESET}
 
 EOF
-
-# Offer to launch straight into login if we have a real terminal.
-if [ "$UNATTENDED" != "1" ] && [ -r /dev/tty ] && command -v claude >/dev/null 2>&1; then
-  if confirm "Launch the studio now to log in?"; then
-    exec ./studio.sh
-  fi
+if interactive && confirm "Start the studio now?"; then
+  exec ./studio.sh
 fi

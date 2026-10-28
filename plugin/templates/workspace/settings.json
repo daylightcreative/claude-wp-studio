@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "model": "opus",
+  "effortLevel": "xhigh",
+  "extraKnownMarketplaces": {
+    "daylight": {
+      "source": { "source": "github", "repo": "daylightcreative/claude-wp-studio" },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "wp-studio@daylight": true
+  },
+  "permissions": {
+    "deny": [
+      "Read(./CREDENTIALS.txt)",
+      "Edit(./CREDENTIALS.txt)",
+      "Read(**/.secrets/**)",
+      "Edit(**/.secrets/**)",
+      "Edit(**/backups/**)",
+      "Read(~/.ssh/**)"
+    ]
+  }
+}

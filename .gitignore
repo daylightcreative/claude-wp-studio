@@ -1,26 +1,7 @@
-# Secrets — never commit
-.secrets/
-projects/**/.secrets/
-CREDENTIALS.txt
-
-# Local Claude Code overrides (user-specific)
-.claude/settings.local.json
-
-# Backups and database dumps
-projects/**/backups/
-*.sql
-*.sql.gz
-
-# Generated search index (rebuilds from markdown)
-library/catalog.db
-
-# Playwright MCP output (screenshots, traces, sessions)
-.playwright-mcp/
-.playwright/
-
-# Python cache
+# Development
+.pytest_cache/
 __pycache__/
 *.pyc
-
-# macOS cruft
 .DS_Store
+.playwright-mcp/
+.claude/settings.local.json

@@ -1,81 +1,91 @@
 # Claude WP Studio
 
-**A ready-to-work WordPress studio for [Claude Code](https://claude.com/claude-code).**
-One command sets up everything — the tools, the configuration, and a built-in WordPress
-knowledge base — so you can build and maintain WordPress sites by *talking to Claude* instead
-of clicking around the dashboard. You direct; Claude does the technical work.
-
----
-
-## Install (macOS)
+**Build and maintain WordPress sites by conversation, safely.** One command turns a Mac into a
+WordPress studio for [Claude Code](https://claude.com/claude-code): you say what you want in
+plain language; Claude does the technical work on your sites over SSH, with the safety rules
+enforced by the tools rather than left to good intentions.
 
 ```bash
 curl -fsSL https://get.daylightcreative.tech/wp-studio | bash
 ```
 
-<sub>Prefer the source URL? `curl -fsSL https://raw.githubusercontent.com/daylightcreative/claude-wp-studio/main/install.sh | bash`</sub>
+macOS. Needs a Claude subscription or API key. MIT licensed. Rather not pipe to bash? Read
+[`install.sh`](install.sh) first, then run it from a clone.
 
-The installer is a guided wizard. It will:
+## What you get
 
-1. Install the prerequisites — Xcode Command Line Tools, Homebrew, a **modern Python** (not
-   macOS's old, locked-down system one), **Node**, and the WordPress tooling (`wp-cli`,
-   ImageMagick, MySQL client, `gh`).
-2. Install the latest **Claude Code** (the native installer, which keeps itself up to date).
-3. Set up **browser-based visual verification** — the **Playwright MCP**, enabled by default,
-   plus a Chromium engine, so Claude can view/snapshot/screenshot your pages (desktop + mobile)
-   right away.
-4. Lay down the studio — a searchable knowledge library, helper scripts, and the working
-   standards — in a folder you choose (default `~/claude-wp-studio`).
-5. Write the Claude Code defaults: **xhigh reasoning effort**, the **opus** model, and a
-   launcher that runs with **full autonomy** (bypass permissions) so Claude isn't stopped on
-   every step.
-6. Optionally connect a **private GitHub backup** on your own account.
-7. Hand off to Claude's login so you connect your subscription or API key.
+- **A site tool Claude can't misuse, `wpsite`.** It's the only route to your sites, and it enforces
+  the rules:
+  - **Backups:** any change needs a verified database backup less than two hours old.
+  - **Safe deploys:** PHP is checked by the server's own PHP before it goes live, the previous
+    version is kept, PHP's code cache is reset, and checksums confirm the upload.
+  - **Secrets stay out of view:** database passwords and WordPress keys are hidden in anything it
+    prints.
+- **Auto mode, not "skip all permissions".** Claude works without stopping to ask about each step.
+  A safety check reviews every action and stops anything risky or irreversible for you to confirm.
+- **WordPress knowledge from real client work.** Fifteen skills Claude loads when the task calls
+  for them, including:
+  - caching by host, and staging hazards;
+  - update policy and hardening, and malware response;
+  - Divi, and migrating from Divi to blocks;
+  - block themes, images, launch QA and debugging.
+- **A browser.** Claude looks at the real rendered page, at desktop and phone widths, rather than
+  guessing.
+- **Passwords never go in the chat.** You type them into a drop-box file. The studio files them
+  away without Claude seeing them, and blocks Claude from reading them afterwards.
+- **Backed up as you go.** Your studio is a git repository that saves to a private GitHub
+  repository on your own account. Any save that would include a password is refused.
 
-> **Unattended / agent-driven install:** add `--unattended` (and optionally `--dir <path>`,
-> `--no-backup`). Designed so another agent can run it headlessly.
+## How it's put together
 
-## Requirements
+| Piece | Where | Who owns it |
+|---|---|---|
+| The **wp-studio plugin**: skills, agents, hooks, `wpsite` and `studio` commands, the browser | This repository (`plugin/`), installed through Claude Code's plugin system | The kit. It updates itself in the background |
+| Your **studio folder**: `projects/`, `clients/`, `WORKLOG.md`, `CLAUDE.md` | `~/claude-wp-studio` by default | You |
+| Kit files inside your studio: `.claude/settings.json`, `.claude/studio-manual.md`, `studio.sh`, `.gitignore` | Your studio folder | The kit. Refreshed at the start of each session; put your own preferences in `CLAUDE.md` |
 
-- macOS (Apple Silicon or Intel)
-- A Claude subscription (Pro/Max/Team/Enterprise) **or** an Anthropic API key
-
-## Using it day to day
+## Day to day
 
 ```bash
-cd ~/claude-wp-studio
-./studio.sh
+cd ~/claude-wp-studio && ./studio.sh
 ```
 
-The first launch asks you to log in, then Claude sets up the rest itself — just tell it
-*"Read START_HERE.md and follow it."* After that, open the folder, run `./studio.sh`, and
-say what you want, e.g.:
+Then talk to Claude:
 
-- *"Pull up my site and tell me what it's built with."*
-- *"On a safe practice copy, give the homepage more breathing room and show me a picture."*
-- *"How much work is it to move this site off Divi onto native WordPress, keeping the design?"*
+- *"Set up a new site: acme.com, hosted on Kinsta."* Claude creates the project and asks you to
+  put the login in `CREDENTIALS.txt`, then checks the connection.
+- *"Change the phone number in the footer on Acme."*
+- *"Something's injecting a weird script into Acme's homepage. Find out what."*
+- *"Plan moving Acme off Divi."*
 
-New users: read **[GETTING_STARTED.md](GETTING_STARTED.md)**.
+## Upgrading from v1
 
-## What's inside
+Run the installer again and point it at your existing folder. It keeps everything that's yours:
+- client records move to `clients/`;
+- connection files are renamed;
+- old backups stay under `backups/v1/`;
+- your old `CLAUDE.md` is kept as `CLAUDE.v1.md`;
+- the full history stays in git.
 
-| | |
-|---|---|
-| **`CLAUDE.md`** | The operating manual Claude loads every session — philosophy, safety rules, the credential protocol. |
-| **`library/`** | A searchable WordPress knowledge base (FTS5 catalog): lessons (caching by host, mu-plugin CSS, SSH/SFTP gotchas, safe edits, image optimization, Divi pitfalls) and playbooks (the working method, client setup, Divi→Gutenberg, sub-agents). |
-| **`tooling/`** | The scripts: `catalog.py` (search), `save.sh` (backup), `maintain.sh` (housekeeping), `credentials.sh` (the secure credential drop box), plus per-project helper templates. |
-| **`projects/`** | One folder per client site — working files, backups, and git-ignored secrets. |
-| **`studio.sh`** | The launcher: updates Claude Code, then starts it with the studio defaults. |
+## Already use Claude Code?
 
-## Safety & credentials
+The plugin only acts inside a studio folder (one with a `.wp-studio` file), so the installer is
+the right way to start. To look at the plugin on its own:
 
-This kit runs Claude Code with **bypass permissions** for a hands-off experience. That's
-powerful — please read **[SECURITY.md](SECURITY.md)** for what that means and the recommended
-way to use it. In short: the studio keeps the safety rules that matter (back up before
-changes, work on staging not live, confirm anything irreversible or public), and your
-credentials go through a git-ignored **drop box** (`CREDENTIALS.txt`) — never the chat, never
-a commit.
+```
+/plugin install wp-studio --marketplace daylightcreative/claude-wp-studio
+```
 
-## License
+## Security
 
-[MIT](LICENSE) © DayLight Creative Technologies
+See [SECURITY.md](SECURITY.md) for exactly what runs, what Claude can and can't do, and where
+your passwords go.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The test suite runs the real tools against a real
+WordPress in Docker.
+
+---
+
+Made by [DayLight Creative Technologies](https://daylightcreative.tech/wp-studio).

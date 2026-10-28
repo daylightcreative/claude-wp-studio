@@ -1,0 +1,24 @@
+# Claude WP Studio (kit-owned: the plugin keeps this file up to date)
+
+# Secrets: never committed, never pushed
+.secrets/
+CREDENTIALS.txt
+*.env
+!*.env.example
+
+# Backups, dumps and downloaded site files: large, and they can hold private data
+projects/*/backups/
+projects/*/work/wordpress/
+*.sql
+*.sql.gz
+*.wpstudio.tar
+*.partial
+
+# Personal Claude Code overrides
+.claude/settings.local.json
+
+# Browser and tool output
+.playwright-mcp/
+.playwright/
+__pycache__/
+.DS_Store

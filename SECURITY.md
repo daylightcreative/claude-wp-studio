@@ -1,81 +1,78 @@
-# Security & Safety
+# Security
 
-Claude WP Studio is designed for a hands-off experience: you describe what you want and Claude
-does the technical work. To make that smooth, it runs Claude Code with elevated autonomy.
-Please read this so you understand exactly what that means and how the studio protects you and
-your clients' sites.
+Claude WP Studio lets an AI work on live websites with little supervision. This page says
+plainly what protects you, and where those protections stop.
 
-## Bypass permissions (full autonomy)
+## What Claude is allowed to do
 
-The launcher (`studio.sh`) starts Claude Code with `--dangerously-skip-permissions`. Normally
-Claude Code asks for approval before running commands or editing files; bypass mode removes
-those per-action prompts so Claude can install tools, edit files, and run commands without
-stopping to ask each time.
+The launcher (`studio.sh`) starts Claude Code in **auto mode**. Claude doesn't ask before each
+step; instead a separate safety classifier reviews every action before it runs. It blocks
+actions that are risky or out of scope, and ones that can't be undone, until you confirm them.
+The studio tells the classifier:
+- `wpsite` is the sanctioned route to your sites;
+- deleting content, users, plugins or themes, database imports and resets, search-replace and DNS
+  changes need your explicit go-ahead.
 
-**What this means for you:**
+Auto mode isn't a guarantee: Anthropic documents it as a safety net, not a sandbox. If auto mode
+isn't available on your account, Claude Code starts in its normal mode and asks you before
+actions instead.
 
-- Claude can read, write, and run commands on your machine within whatever it's working on,
-  without prompting. That is the point — it's what makes the studio feel like delegating to a
-  capable assistant — but it is real power.
-- **Recommendation:** use the studio in a **dedicated folder** (the installer sets one up) and,
-  ideally, under an account that doesn't hold unrelated sensitive data. Treat it like giving a
-  contractor a key to one room, not the whole house.
-- Bypass is applied **only by the launcher**, scoped to studio sessions. It is *not* set in the
-  shared project settings (Claude Code ignores bypass there by design), so it doesn't silently
-  change how Claude Code behaves elsewhere on your system.
+## Rules the tools enforce
 
-**Bypass removes prompts, not judgment.** The operating manual (`CLAUDE.md`) keeps the rules
-that matter and instructs Claude to still **confirm with you** before anything irreversible or
-public — touching a live site, changing DNS, deleting things, or spending money — and to:
+These hold whatever Claude decides. Each is covered by the test suite:
 
-- **discover before it touches** (read the real site state before changing anything),
-- **back up before every change**,
-- **work on staging or a local copy, not live**,
-- **lint PHP (`php -l`) before deploying**, and
-- **purge the right cache** after changes.
+| Rule | Enforced by |
+|---|---|
+| No change to a site without a verified database backup of that environment from the last 2 hours | `wpsite` (fails closed: any command not known to be read-only counts as a change) |
+| PHP is syntax-checked by the server's own PHP before it can be loaded | `wpsite deploy` (uploads to a private folder outside the website, checks, then renames into place) |
+| The previous version of anything replaced is kept | `wpsite deploy` |
+| Folders shared with other things (`wp-content/plugins`, `themes`, `uploads` and the like) can't be replaced wholesale | `wpsite deploy` |
+| Database passwords and WordPress keys and salts are hidden in output; `wp config get DB_PASSWORD` is refused | `wpsite` |
+| Raw `ssh`, `scp`, `sftp` and `rsync` to a server are refused | the plugin's Bash hook |
+| Claude can't read `CREDENTIALS.txt` or any `.secrets/` folder | permission deny rules (file tools and the file commands Claude Code recognises) plus the Bash hook |
+| Nothing secret reaches git or your GitHub backup | `.gitignore`, plus a scan before every commit (also run as a git pre-commit hook). It refuses any value the studio holds for a site, private keys, wp-config secrets, common API-token formats, database dumps, and files too big for GitHub |
 
-If you'd rather *not* run with bypass, launch Claude Code with plain `claude` from the studio
-folder instead of `./studio.sh`; you'll keep the model/effort defaults and get normal approval
-prompts.
+**Where these stop.** The Bash hook reads command text. A program Claude writes during a session
+(a Python script that opens a network connection itself, say) isn't something it can see. That
+case is left to the auto-mode classifier, which reviews what the program does. The backup rule
+needs the backup to be *fresh*. It doesn't check that the backup covers the specific change, and
+it doesn't restore anything for you.
 
-## How credentials are handled
+## Where your passwords go
 
-Secrets never go into the chat and never get committed.
+1. You type a site's login into `CREDENTIALS.txt` in your studio folder.
+2. `wpsite secrets file <site>` reads it and writes the details to
+   `projects/<site>/.secrets/<env>.env` (permissions `600`, inside a `700` folder). It then resets
+   the drop box to blank. What it prints names the fields it filed, never their values.
+3. When `wpsite` connects, it hands the SSH password to `ssh` through `SSH_ASKPASS`, a helper that
+   reads it from the environment. The password never appears on a command line, in a terminal
+   prompt or in the conversation.
 
-- **The drop box.** `CREDENTIALS.txt` at the studio root is where you paste a login, SSH
-  details, or an API key when Claude needs one. Claude reads it, files it into the relevant
-  project's `.secrets/connection.env` (permissions `600`), confirms it works, and then **wipes
-  the drop box back to blank**.
-- **Git-ignored by default.** `CREDENTIALS.txt`, every `.secrets/` folder, and database dumps
-  are listed in `.gitignore`, so they are never committed and never pushed to your backup.
-- **No secrets in the knowledge base.** Library docs only ever *reference where* a secret
-  lives, never the secret itself.
+Claude doesn't see the password at any point in this flow, so it doesn't reach Anthropic or your
+Claude Code transcripts. If you paste a password into the chat instead, it does both. Use the
+drop box.
 
-Before its first push, the studio also sanity-checks that nothing under `.secrets/` or
-`CREDENTIALS.txt` is staged.
+**Prefer keys.** `wpsite key <site>` sets up SSH key login. Where the host manages keys in its
+dashboard, it prints the public key for you to add there.
 
-## The bundled Playwright MCP (browser automation)
+## What gets installed
 
-So Claude can verify how pages render, the kit ships the **Playwright MCP** — declared in the
-project `.mcp.json` and **pre-approved** via `enabledMcpjsonServers` in `.claude/settings.json`,
-so it's available without an approval prompt. What that means:
+- Homebrew (if missing), Node, the GitHub CLI and ImageMagick.
+- Claude Code (Anthropic's native installer).
+- The wp-studio plugin, from this repository's marketplace. Third-party plugins can run code on
+  your Mac with your permissions; this one runs the Python in `plugin/` (standard library only)
+  and the pinned Playwright MCP server (`@playwright/mcp`, exact version in `plugin/.mcp.json`).
+- The Chrome-for-Testing browser that Playwright uses (headless, separate from your own browser).
 
-- On use, Claude Code runs `npx @playwright/mcp@latest`, which launches a (headless) Chromium
-  browser the agent can navigate and screenshot. The browser engine is installed by the
-  installer (Playwright's own Chromium, not your system Chrome).
-- It's pre-approved **only** for the server named `playwright` from this kit's `.mcp.json` (via
-  the precise `enabledMcpjsonServers` list — not a blanket "approve everything"). Any other MCP
-  server you add later still goes through normal approval.
-- If you'd rather it not be auto-approved, remove `"enabledMcpjsonServers"` from
-  `.claude/settings.json` (you'll then get a one-time approval prompt), or delete `.mcp.json`.
+## Backups
 
-## The backup is yours
+Your studio is a git repository. `studio save` (and the end of every session) commits locally,
+then pushes to the GitHub repository you linked, if any. The push runs in the background. If it
+fails, the next session tells you. Database dumps stay on your Mac in `projects/<site>/backups/`;
+they aren't pushed.
 
-The optional cloud backup pushes to a **private GitHub repo on your own account** (connected
-via `gh auth login` during install). No tokens or credentials are shipped with this kit, and
-nothing is sent anywhere you didn't connect.
+## Reporting a vulnerability
 
-## Reporting a problem
-
-If you find a security issue in the kit itself (the scripts or configuration), please open an
-issue or contact the maintainer rather than disclosing it publicly.
+Please report security problems in the kit privately through
+[GitHub's private vulnerability reporting](https://github.com/daylightcreative/claude-wp-studio/security/advisories/new),
+not in a public issue.
