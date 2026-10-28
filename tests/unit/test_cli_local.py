@@ -189,3 +189,31 @@ def test_pulled_archives_cannot_write_outside_their_folder(tmp_path):
     assert sorted(skipped) == ["../escaped.txt", "link", "sub/../../escaped2.txt"]
     assert (target / "ok.txt").read_text() == "x"
     assert not (tmp_path / "work" / "escaped.txt").exists() and not (tmp_path / "escaped2.txt").exists()
+
+
+def test_transformed_wp_config_output_is_refused_even_with_a_backup(studio, fake_ssh):
+    project = make_site(studio)
+    make_backup(project)
+    for command in ("cat wp-config.php | rev", "od -c wp-config.php", "grep KEY wp-config.php | tr a-z A-Z"):
+        result = wpsite("sh", "acme", command)
+        assert result.returncode == 3 and "can't mask" in result.stderr
+
+
+def test_json_escaped_secrets_are_masked(studio, fake_ssh):
+    from wpstudio import remote
+    from wpstudio.sites import resolve
+    project = make_site(studio)
+    site = resolve("acme", studio)
+    site.server_secrets_file.write_text(json.dumps({"fetched": __import__("time").time(), "values": ["Zq8/kP2+vX9"]}))
+    literals = remote.secret_literals(site)
+    from wpstudio import redact
+    assert redact.redact_line('{"value":"Zq8\\/kP2+vX9","name":"NONCE_SALT"}', literals) == '{"value":"[redacted]","name":"NONCE_SALT"}'
+
+
+def test_the_studio_ssh_key_cannot_be_deployed(studio, fake_ssh, monkeypatch, tmp_path):
+    project = make_site(studio)
+    make_backup(project)
+    key = tmp_path / "key"
+    key.write_text("PRIVATE")
+    result = wpsite("deploy", "acme", str(key), "wp-content/uploads/k.txt")
+    assert result.returncode == 3

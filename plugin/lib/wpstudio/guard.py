@@ -88,8 +88,6 @@ WP_SAFE_FLAGS = {
 WP_UNSAFE_FLAGS = {"exec", "require", "ssh", "http", "path", "prompt", "skip-wordpress"}
 DUMP_SAFE_FLAGS = {"single-transaction", "quick", "add-drop-table", "tables", "exclude_tables", "porcelain",
                    "skip-plugins", "skip-themes", "quiet"}
-SQL_READ = re.compile(r"^\s*(select|show|describe|desc|explain)\b", re.I)
-SQL_WRITES_FILE = re.compile(r"\binto\s+(out|dump)file\b", re.I)
 
 
 def _flag_name(arg: str) -> str:
@@ -119,11 +117,6 @@ def wp_command_path(args: Sequence[str]) -> List[str]:
     return words
 
 
-def _read_sql(sql: str) -> bool:
-    body = sql.strip().rstrip(";")
-    return SQL_READ.match(body) is not None and ";" not in body and SQL_WRITES_FILE.search(body) is None
-
-
 def wp_is_read_only(args: Sequence[str]) -> bool:
     args = list(args)
     if args[:1] == ["wp"]:
@@ -142,9 +135,11 @@ def wp_is_read_only(args: Sequence[str]) -> bool:
     for size in (3, 2, 1):
         if tuple(words[:size]) in WP_CACHE_SAFE:
             return all(_safe_flag(f) for f in flags)
-    if words[:2] == ["db", "query"]:
-        # Every flag is handed to the mysql client (--init-command runs SQL), so none are allowed.
-        return not flags and len(positional) == 3 and _read_sql(positional[2])
+    if words[:2] == ["db", "query"] or words[:1] == ["sql"]:
+        # The SQL goes to the mysql client, which runs its own commands inside the text (\g starts a
+        # new statement, \! runs a shell command, \T writes a file) and hands it flags such as
+        # --init-command. No SQL text is judged read-only; use `db tables`, `db size`, `db search`.
+        return False
     if words[:2] == ["db", "export"]:
         # `wp db export -` streams to stdout; a file target writes a dump on the server, and
         # mysqldump flags such as --result-file write files too.
@@ -170,7 +165,16 @@ def wp_is_read_only(args: Sequence[str]) -> bool:
 # Programs `wpsite sh` may run without a backup. Each maps to a check of its arguments; programs
 # that can write a file with the right flag (sed, sort, tee, tree, mysql, …) aren't here at all.
 def _no(*bad):
-    return lambda args: not any(a == b or a.startswith(b) for a in args for b in bad)
+    """Refuse the given options, including inside a cluster of short flags (-mC contains -C)."""
+    shorts = {b[1] for b in bad if len(b) == 2 and b[0] == "-" and b[1] != "-"}
+    def check(args):
+        for a in args:
+            if any(a == b or a.startswith(b) for b in bad):
+                return False
+            if a.startswith("-") and not a.startswith("--") and shorts & set(a[1:]):
+                return False
+        return True
+    return check
 
 
 def _only_flags(*allowed):
@@ -196,11 +200,17 @@ SHELL_READ = {
 }
 
 
+# Programs that print wp-config.php's text unchanged, so masking by value still recognises the
+# secrets in it. Anything else naming the file (rev, tr, od…) counts as a change.
+CONFIG_SAFE_READERS = {"grep", "egrep", "fgrep", "cat", "head", "tail", "ls", "stat", "wc", "md5sum", "sha1sum",
+                       "sha256sum", "find", "test", "[", "php", "file"}
+
+
 def _simple_commands(command: str) -> Optional[List[List[str]]]:
     """Split into simple commands, dropping harmless redirections. None means "can't judge"."""
     if re.search(r"\$\(|`|\$\{|<\(|>\(", command):
         return None
-    tokens = shellwords.tokenize(command)
+    tokens = shellwords.literal_words(command)
     if tokens is None:
         return None
     commands: List[List[str]] = [[]]
@@ -233,11 +243,23 @@ def _simple_commands(command: str) -> Optional[List[List[str]]]:
     return [c for c in commands if c]
 
 
+def config_output_is_maskable(command: str) -> bool:
+    """False when a command names wp-config.php and could print its text transformed (reversed,
+    re-cased, hex-dumped), which masking by value can't recognise."""
+    if "wp-config" not in command.lower():
+        return True
+    commands = _simple_commands(command)
+    return commands is not None and all(w[0] in CONFIG_SAFE_READERS or w[0] == "cd" for w in commands)
+
+
 def shell_is_read_only(command: str) -> bool:
     commands = _simple_commands(command)
     if commands is None:
         return False
+    names_config = any("wp-config" in word.lower() for words in commands for word in words)
     for words in commands:
+        if names_config and words[0] not in CONFIG_SAFE_READERS and words[0] != "cd":
+            return False  # could print wp-config.php's secrets in a form masking by value misses
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
             return False  # VAR=value can change how the next program behaves (WP_CLI_PHP_ARGS, LD_PRELOAD…)
         program = words[0]

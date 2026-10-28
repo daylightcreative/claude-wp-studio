@@ -302,6 +302,11 @@ function wpstudio_update_policy_failures() {
  * @return string 'theme', 'plugin' or '' when neither is installed.
  */
 function wpstudio_hold_type( $id ) {
+	// A list-form entry ( array( '5.3' ) ) has key 0, and wp_get_theme( '0' ) means "the active
+	// theme", so a numeric or empty key would report a hold that holds nothing. It names nothing.
+	if ( ! is_string( $id ) || '' === $id || ctype_digit( $id ) ) {
+		return '';
+	}
 	if ( '' !== wpstudio_installed_theme_version( $id ) ) {
 		return 'theme';
 	}

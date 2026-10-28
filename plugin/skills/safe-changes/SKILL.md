@@ -68,6 +68,14 @@ email, or changing anything visitors will see on live: describe it in plain word
 backup is, and get the operator's yes. Plain version to the operator: *"I'm about to delete the
 three old landing pages. I've saved copies. Once they're gone, links to them will 404. OK?"*
 
+**What counts as a change.** `wpsite` treats anything it can't prove read-only as a change:
+every `wp db query` (the mysql client can run commands from inside the SQL text), any WP-CLI flag
+outside its known-safe list, and in `wpsite sh` any unquoted `$`, `*`, `{`, `~` or backslash (the
+server's shell would expand them into text nobody checked). Quote search patterns, prefer
+`wp db tables`, `wp db search` and the `wp post list` family for reading, and when you do need SQL,
+take the backup first. A command that names `wp-config.php` may only read it with `grep`, `cat`,
+`head` or `tail`; change it with `wp config set`.
+
 ## 5. Editing content through WP-CLI
 
 Feed the new content in with `--input` (`-` makes WP-CLI read post content from standard input,

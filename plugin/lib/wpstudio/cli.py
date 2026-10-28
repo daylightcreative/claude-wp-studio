@@ -85,7 +85,10 @@ def refuse_secret_path(root: Path, path: Path, what: str) -> None:
     resolved = path.expanduser().resolve()
     store = workspace.secrets_home().resolve()
     box = workspace.dropbox_path(root).resolve()
-    if resolved == box or resolved == store or store in resolved.parents or resolved.name.lower() == "credentials.txt":
+    key = key_path().resolve()
+    ssh_dir = (Path.home() / ".ssh").resolve()
+    if (resolved in (box, store, key, key.with_suffix(".pub")) or store in resolved.parents or ssh_dir == resolved
+            or ssh_dir in resolved.parents or resolved.name.lower() == "credentials.txt"):
         raise Refused("Refused: %s would read or write the credential drop box or the secrets store." % what)
 
 
@@ -343,6 +346,10 @@ def _run_with_input(site: Site, command: str, input_path: Optional[str]):
 def cmd_sh(args, root: Path) -> int:
     site = resolve(args.site, root)
     command = args.command
+    if not guard.config_output_is_maskable(command):
+        raise Refused("Refused: that command names wp-config.php and could print its passwords and keys in a form "
+                      "wpsite can't mask. Read it with grep, cat, head or tail, and change it with "
+                      "`wpsite wp %s config set …`." % site.spec)
     if not guard.shell_is_read_only(command):
         require_fresh_backup(site, "`%s`" % command)
         log_activity(site, command)
@@ -743,7 +750,10 @@ def cmd_key(args, root: Path) -> int:
     if site.values.get("SSH_PASSWORD"):
         remote.close_master(site)
         copy = subprocess.run(
-            ["ssh-copy-id", "-i", str(key.with_suffix(".pub")), "-p", site.port, "-o", "StrictHostKeyChecking=accept-new",
+            # -f: install without first trying to log in with the key (that probe offers the agent's keys and
+            # can use up the server's login attempts); the password options mirror remote._auth_options.
+            ["ssh-copy-id", "-f", "-i", str(key.with_suffix(".pub")), "-p", site.port, "-o", "StrictHostKeyChecking=accept-new",
+             "-o", "PreferredAuthentications=password,keyboard-interactive", "-o", "PubkeyAuthentication=no",
              "-o", "NumberOfPasswordPrompts=1"] + (["-o", "UserKnownHostsFile=%s" % remote.known_hosts()] if remote.known_hosts() else [])
             + [remote._target(site)],
             stdin=subprocess.DEVNULL, capture_output=True, text=True, env=remote.auth_env(site))

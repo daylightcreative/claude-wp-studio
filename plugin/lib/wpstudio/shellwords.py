@@ -30,3 +30,62 @@ def tokenize(command: str) -> Optional[List[str]]:
 
 def is_operator(token: str) -> bool:
     return bool(token) and set(token) <= OPERATOR_CHARS
+
+
+UNQUOTED_SPECIAL = set("$`\\{}*?[]!")
+WORD_START_SPECIAL = set("~#")
+
+
+def literal_words(command: str) -> Optional[List[str]]:
+    """Words and operators, or None unless every word is literal text.
+
+    Stricter than tokenize(), for deciding that a command only reads: the remote shell would expand
+    `$'…'`, `$(…)`, `${…}`, `{a,b}`, globs, `~` and backslash escapes into text nobody checked (a
+    `$'-delete'` becomes `-delete`), so any of those outside single quotes means "can't judge".
+    Single-quoted text is literal; double-quoted text is literal unless it holds `$`, a backtick or
+    a backslash.
+    """
+    tokens: List[str] = []
+    word: Optional[List[str]] = None
+    index = 0
+    text = command.replace("\r", "\n")
+    while index < len(text):
+        char = text[index]
+        if char == "'":
+            end = text.find("'", index + 1)
+            if end < 0:
+                return None
+            word = (word or []) + list(text[index + 1:end])
+            index = end + 1
+            continue
+        if char == '"':
+            end = text.find('"', index + 1)
+            if end < 0:
+                return None
+            inner = text[index + 1:end]
+            if set(inner) & set("$`\\"):
+                return None
+            word = (word or []) + list(inner)
+            index = end + 1
+            continue
+        if char in " \t" or char == "\n" or char in OPERATOR_CHARS:
+            if word is not None:
+                tokens.append("".join(word))
+                word = None
+            if char == "\n":
+                tokens.append(";")
+            elif char in OPERATOR_CHARS:
+                op = char
+                while index + 1 < len(text) and text[index + 1] in OPERATOR_CHARS:
+                    index += 1
+                    op += text[index]
+                tokens.append(op)
+            index += 1
+            continue
+        if char in UNQUOTED_SPECIAL or (word is None and char in WORD_START_SPECIAL):
+            return None
+        word = (word or []) + [char]
+        index += 1
+    if word is not None:
+        tokens.append("".join(word))
+    return tokens

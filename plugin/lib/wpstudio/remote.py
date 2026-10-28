@@ -19,6 +19,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -99,8 +100,14 @@ def auth_env(site: Site) -> dict:
 
 
 def _auth_options(site: Site) -> List[str]:
+    if site.values.get("SSH_KEY"):
+        return ["-o", "BatchMode=yes"]  # IdentitiesOnly (in _common_options) offers just this key
     if site.values.get("SSH_PASSWORD"):
-        return ["-o", "NumberOfPasswordPrompts=1"]
+        # Go straight to the password. Otherwise ssh first offers every key in the Mac's SSH agent,
+        # and a server allowing six attempts disconnects ("Too many authentication failures")
+        # before the password is ever tried.
+        return ["-o", "PreferredAuthentications=password,keyboard-interactive", "-o", "PubkeyAuthentication=no",
+                "-o", "NumberOfPasswordPrompts=1"]
     return ["-o", "BatchMode=yes"]
 
 
@@ -215,13 +222,26 @@ def server_secrets(site: Site, refresh: bool = False) -> List[str]:
     return values
 
 
+def escaped_forms(value: str) -> List[str]:
+    """The ways a value shows up in output: as is, JSON-escaped (PHP's json_encode also writes / as \\/),
+    and with shell or PHP quote escaping."""
+    as_json = json.dumps(value)[1:-1]
+    forms = {value, as_json, as_json.replace("/", "\\/"), value.replace("/", "\\/"),
+             value.replace("'", "\\'"), value.replace('"', '\\"'), value.replace("'", "'\\''")}
+    return [f for f in forms if f]
+
+
 def secret_literals(site: Site, fetch: bool = True) -> List[str]:
-    """Every value to mask in this site's output: everything secret in its connection file, plus
-    the server's own secrets."""
+    """Every value to mask in this site's output, in every escaped form: everything secret in its
+    connection file, plus the server's own secrets."""
     values = envfile.secret_values(site.values)
     if fetch and site.values.get("WP_PATH"):
-        values += server_secrets(site)
-    return sorted(set(values), key=len, reverse=True)
+        learned = server_secrets(site)
+        if not learned and not site.server_secrets_file.is_file():
+            sys.stderr.write("Note: couldn't read this site's wp-config.php secrets, so output is masked by "
+                             "pattern only. Run `wpsite check %s` once WordPress answers.\n" % site.spec)
+        values += learned
+    return sorted({form for v in values for form in escaped_forms(v)}, key=len, reverse=True)
 
 
 def run_text(site: Site, command: str, in_wp_root: bool = True, stdin: Optional[IO[bytes]] = None):

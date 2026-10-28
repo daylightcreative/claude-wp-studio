@@ -132,10 +132,9 @@ if ( WPSTUDIO_BLOCK_USER_ENUMERATION ) {
 	add_action(
 		'template_redirect',
 		function () {
-			if ( ! is_author() || ! isset( $_GET['author'] ) || ! is_scalar( $_GET['author'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
-				return;
-			}
-			if ( preg_match( '/^\d+$/', (string) wp_unslash( $_GET['author'] ) ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+			// Any ?author= value that produced an author archive (1, 1,2, an array) would show the
+			// author's name in the page, so every form is sent home; /author/<name>/ links are untouched.
+			if ( is_author() && isset( $_GET['author'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
 				wp_safe_redirect( home_url( '/' ), 302 );
 				exit;
 			}
@@ -198,6 +197,27 @@ add_filter(
 		}
 		$errors->add( 'wpstudio_invalid_login', __( '<strong>Error:</strong> Invalid username or password.' ) );
 		return $errors;
+	}
+);
+
+/*
+ * The lost-password form has its own tell: core shows "There is no account with that username or
+ * email address" (error codes invalidcombo and invalid_email from retrieve_password()), while a real
+ * account is sent to wp-login.php?checkemail=confirm. wp_login_errors doesn't run on that screen,
+ * and lostpassword_errors runs before invalidcombo is added, so act on the lost_password action
+ * (fired in wp-login.php with the errors, before the form is drawn, WordPress 6.9) and send an
+ * unknown account to the same "check your email" page a real one gets.
+ */
+add_action(
+	'lost_password',
+	function ( $errors ) {
+		if ( 'POST' !== ( isset( $_SERVER['REQUEST_METHOD'] ) ? $_SERVER['REQUEST_METHOD'] : '' ) || ! is_wp_error( $errors ) ) {
+			return;
+		}
+		if ( array_intersect( $errors->get_error_codes(), array( 'invalidcombo', 'invalid_email' ) ) ) {
+			wp_safe_redirect( site_url( 'wp-login.php?checkemail=confirm', 'login' ) );
+			exit;
+		}
 	}
 );
 

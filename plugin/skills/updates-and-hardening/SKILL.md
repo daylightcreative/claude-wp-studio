@@ -181,7 +181,8 @@ once the policy forces updates, but they make the inventory lie; clean them as p
   the host already sends. Strict-Transport-Security is deliberately not sent: it stays in browsers
   for its full lifetime and makes a later certificate problem an outage. That is the owner's call.
 - Generic login error ("Invalid username or password.") in place of WordPress's wrong-username,
-  unknown-email and wrong-password messages, so a failed login never confirms a username. Every
+  unknown-email and wrong-password messages, so a failed login never confirms a username; the
+  lost-password form answers an unknown account with the same "check your email" page. Every
   other login message (the throttle's lockout, a security plugin's) and registration errors pass
   through unchanged.
 - `DISALLOW_FILE_EDIT` (dashboard code editors off; costs nothing, blocks no updates).

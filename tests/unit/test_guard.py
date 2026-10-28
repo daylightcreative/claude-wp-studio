@@ -10,8 +10,7 @@ from conftest import make_backup
     "plugin list", "plugin list --status=active --field=name", "theme status twentytwentyfive",
     "core version", "core verify-checksums", "option get home", "option list --search=blog*",
     "post list --post_type=page --fields=ID,post_title", "post get 12 --field=post_content",
-    "post meta list 12", "user list --role=administrator", "db size", "db tables",
-    "db query 'SELECT ID FROM wp_posts LIMIT 1'", "db export -", "search-replace a b --dry-run",
+    "post meta list 12", "user list --role=administrator", "db size", "db tables", "db export -", "search-replace a b --dry-run",
     "cli has-command 'kinsta cache'", "--info", "cache flush", "kinsta cache purge --all",
     "litespeed-purge all", "config list", "cron event list", "menu item list main",
 ])
@@ -33,6 +32,9 @@ def test_reading_commands_need_no_backup(args):
     "db query 'SELECT 1' --init-command='DELETE FROM wp_posts'", "db check --repair", "cli update --yes",
     "db query \"SELECT * FROM wp_users INTO OUTFILE '/tmp/u'\"", "db export - --result-file=x.sql",
     "cron test", "transient delete --all", "plugin list -v",
+    # Review round 2: SQL text is never a read (the mysql client runs \\g, \\! and \\T inside it).
+    "db query 'SELECT ID FROM wp_posts LIMIT 1'", "db query \"SELECT 1 \\g UPDATE wp_options SET option_value='x'\"",
+    "db query 'SELECT 1 \\! touch /tmp/x'", "db query 'select * from wp_users into/**/outfile \"/tmp/u\"'",
 ])
 def test_changing_commands_need_a_backup(args):
     assert guard.wp_is_read_only(shlex.split(args)) is False
@@ -56,6 +58,10 @@ def test_read_only_shell(command):
     "tree -o index.php", "tar -tf x.tar --checkpoint=1 --checkpoint-action=exec='rm -rf wp-content'",
     "mysql -e 'select 1; delete from wp_posts'", "WP_CLI_PHP_ARGS='-d auto_prepend_file=/tmp/x' wp option get home",
     "{ rm x; }", "( rm x )", "ls # \nrm x", "ls ${IFS}x", "/bin/rm x", "file -C -m x",
+    # Review round 2: text the remote shell expands into flags nobody checked.
+    "find . -maxdepth 1 -name keepme.txt $'-delete'", "find . {-delete,}", "find . $\"-delete\"",
+    "wp option get home $'--exec=update_option(1,2);'", "ls wp-content/*.php", "ls ~", "file -mC x",
+    "cat wp-config.php | rev", "grep AUTH_KEY wp-config.php | tr a-z A-Z", "od -c wp-config.php",
     "rm -rf wp-content/cache", "mv a b", "echo x > index.php", "cat a >> b", "find . -name x -delete",
     "find . -exec rm {} +", "sed -i s/a/b/ wp-config.php", "wp option update a b", "chmod 777 x",
     "ls $(rm -rf /)", "ls `id`", "php -r 'unlink(\"x\");'", "php script.php", "tar -xf x.tar",

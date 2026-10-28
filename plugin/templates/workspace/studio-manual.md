@@ -44,7 +44,9 @@ A site is `<name>` for the live site or `<name>:staging` (any environment name) 
    settings.
 2. **Back up before you change.** `wpsite` refuses any command that can change a site unless a
    verified database backup less than two hours old exists. When it refuses, run
-   `wpsite backup <site>` and try again. Never try to get around the refusal.
+   `wpsite backup <site>` and try again. Never try to get around the refusal. It is deliberately
+   cautious: any `wp db query` (even a SELECT), unquoted `*` or `$` in a `wpsite sh` command, or an
+   unfamiliar flag counts as a change. Quote patterns (`find . -name '*.php'`), or take the backup.
 3. **Staging first.** Build and experiment on staging or a local copy. Touch live only for small,
    confirmed edits or the agreed cutover, and say which environment you're on.
 4. **Ask before anything irreversible or public.** Deleting content, users, plugins or themes,

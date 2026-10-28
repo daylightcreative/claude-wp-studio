@@ -53,20 +53,44 @@ def _deny(reason: str) -> dict:
                                    "permissionDecisionReason": reason}}
 
 
+def _words_deep(command: str, depth: int = 0) -> List[str]:
+    """Every word in a command line, and every word inside its quoted strings, split on `=` too.
+
+    A quoted string can be a command in waiting (`bash -lc '…'`, `bash <<<'…'`, `echo '…' | sh`,
+    `git -c core.sshCommand='ssh …'`), so its words are checked like the outer ones.
+    """
+    tokens = shellwords.tokenize(command)
+    if tokens is None:
+        tokens = command.split()
+    words = []
+    for token in tokens:
+        if shellwords.is_operator(token):
+            continue
+        words.append(token)
+        words.extend(part for part in token.split("=")[1:] if part)
+        if depth < 3 and (" " in token or "=" in token or ";" in token):
+            for inner in [token] + token.split("=")[1:]:
+                if inner != token or " " in token or ";" in token:
+                    words.extend(_words_deep(inner, depth + 1))
+    return words
+
+
 def names_a_secret(token: str) -> bool:
     """Does this word name (or glob-match) the drop box, the secrets store or the studio's SSH key?"""
-    lowered = token.lower()
-    if any(mark in lowered for mark in ("credentials.txt", "wp-studio/secrets", "wpstudio_ed25519", ".ssh/wpstudio",
-                                        "controlpath")):
+    lowered = token.lower().replace("\\", "/")
+    if any(mark in lowered for mark in ("credentials.txt", "controlpath")):
         return True
-    parts = [p for p in lowered.replace("\\", "/").split("/")]
+    parts = [part for part in lowered.split("/") if part not in ("", ".")]
     for index, part in enumerate(parts):
-        if not part:
-            continue
         if fnmatch.fnmatchcase("credentials.txt", part):
             return True
-        if index > 0 and fnmatch.fnmatchcase("wp-studio", part) and fnmatch.fnmatchcase(".config", parts[index - 1]):
+        if fnmatch.fnmatchcase("wp-studio", part) or fnmatch.fnmatchcase("wpstudio_ed25519", part) \
+                or fnmatch.fnmatchcase("wpstudio_ed25519.pub", part):
             return True
+        if part == "wpstudio" and index > 0 and parts[index - 1] == ".ssh":
+            return True
+        if fnmatch.fnmatchcase(".config", part) and index == len(parts) - 1:
+            return True  # the folder that holds the secrets store, searched as a whole
     return False
 
 
@@ -90,32 +114,32 @@ def _commands(tokens: List[str]):
     return
 
 
-def _remote_violation(tokens: List[str], depth: int = 0) -> bool:
-    for program, args in _commands(tokens):
-        base = program.rsplit("/", 1)[-1]
+def _remote_violation(command: str) -> bool:
+    """Fail closed: any ssh-family program named anywhere, in any quoted string, is refused."""
+    for word in _words_deep(command):
+        base = word.rsplit("/", 1)[-1]
         if base in REMOTE_TOOLS:
             return True
-        if base == "rsync" and any(a in ("-e", "--rsh") or a.startswith("--rsh=")
-                                   or (":" in a and not a.startswith(("/", "./", "../", "~")) and "://" not in a)
-                                   or a.startswith("rsync://") for a in args):
+    tokens = shellwords.tokenize(command)
+    for program, args in (_commands(tokens) if tokens is not None else []):
+        if program.rsplit("/", 1)[-1] == "rsync" and any(
+                a in ("-e", "--rsh") or a.startswith("--rsh=") or a.startswith("rsync://")
+                or (":" in a and not a.startswith(("/", "./", "../", "~")) and "://" not in a) for a in args):
             return True
-        if depth < 3 and base in SHELLS and "-c" in args:
-            inner = args[args.index("-c") + 1] if args.index("-c") + 1 < len(args) else ""
-            inner_tokens = shellwords.tokenize(inner)
-            if inner_tokens is None or _remote_violation(inner_tokens, depth + 1):
-                return True
-        if depth < 3 and base == "eval":
-            inner_tokens = shellwords.tokenize(" ".join(args))
-            if inner_tokens is None or _remote_violation(inner_tokens, depth + 1):
-                return True
     return False
 
 
-def _agent_violation(tokens: List[str]) -> Optional[str]:
-    """Read-only agents may only run wpsite commands that can't change a site."""
+def _agent_violation(command: str) -> Optional[str]:
+    """Read-only agents may only run wpsite commands that can't change a site, at the top level."""
+    tokens = shellwords.tokenize(command)
+    if tokens is None:
+        return "Blocked: this agent is read-only and that command couldn't be checked."
+    mentions = sum(1 for w in _words_deep(command) if "wpsite" in w)
+    checked = 0
     for program, args in _commands(tokens):
-        if program.rsplit("/", 1)[-1] != "wpsite":
+        if program != "wpsite":
             continue
+        checked += 1
         verb = args[0] if args else ""
         rest = args[1:]
         if verb in ("list", "check", "pull", "backup"):
@@ -127,21 +151,19 @@ def _agent_violation(tokens: List[str]) -> Optional[str]:
         if verb == "sh" and len(rest) == 2 and guard.shell_is_read_only(rest[1]):
             continue
         return "Blocked: this agent is read-only and `wpsite %s` can change a site. Report what you'd change instead." % verb
+    if mentions > checked:
+        return "Blocked: this agent is read-only; run wpsite commands directly, not through another program or path."
     return None
 
 
 def check_bash(command: str, agent_type: Optional[str] = None) -> Optional[dict]:
     """Return a deny decision for a Bash command, or None to let it through."""
-    tokens = shellwords.tokenize(command)
-    words = tokens if tokens is not None else command.split()
-    if any(names_a_secret(w) for w in words):
+    if any(names_a_secret(w) for w in _words_deep(command)):
         return _deny(SECRET_REASON)
-    if CURL_REMOTE_FILE.search(command) or tokens is None and re.search(r"\b(ssh|scp|sftp|rsync)\b", command):
+    if CURL_REMOTE_FILE.search(command) or _remote_violation(command):
         return _deny(REMOTE_REASON)
-    if tokens is not None and _remote_violation(tokens):
-        return _deny(REMOTE_REASON)
-    if agent_type and agent_type.split(":")[-1] in READ_ONLY_AGENTS and tokens is not None:
-        reason = _agent_violation(tokens)
+    if agent_type and agent_type.split(":")[-1] in READ_ONLY_AGENTS:
+        reason = _agent_violation(command)
         if reason:
             return _deny(reason)
     return None
