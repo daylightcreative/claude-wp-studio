@@ -126,6 +126,20 @@ Limits — tell the operator about these rather than assuming they are covered:
   both filters. List the site's mail and integration plugins and check each one.
 - **Find the hosts to block from the site's own configuration** (form feeds, newsletter
   integrations, CRM add-ons), not from memory.
+- **A plugin that replaces `wp_mail()` itself bypasses the mail block.** `wp_mail()` is a
+  pluggable function, and `pre_wp_mail` is applied inside core's version
+  (`wp-includes/pluggable.php`, checked in WordPress 6.9.4). An SMTP or mail-service plugin that
+  defines its own `wp_mail()` sends without ever reaching the filter. Which plugins do this is
+  UNVERIFIED; check the site in front of you. This must print a path ending in
+  `wp-includes/pluggable.php`:
+  `wpsite wp acme:staging eval '$r = new ReflectionFunction( "wp_mail" ); echo $r->getFileName();'`
+  Any other file means that plugin's own test or sandbox mode is the only block.
+- **Multisite with mapped domains.** The guard compares the current site's `home_url()` with the
+  one `WPSTUDIO_PRODUCTION_URL`. On a multisite network every subsite has its own home URL, so on
+  production each mapped-domain subsite other than that one would read as "not production" and
+  have its mail and listed webhooks blocked. That follows from the code; it has not been tested
+  on a real network (UNVERIFIED). Do not install the guard network-wide until it has been tried
+  on that network's staging copy.
 - **Scheduled jobs on staging still run.** Server cron jobs copied with a clone can import,
   sync or send from staging; check `wpsite sh acme:staging 'crontab -l'` and WP-Cron
   (`wpsite wp acme:staging cron event list`).

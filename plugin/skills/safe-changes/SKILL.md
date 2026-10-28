@@ -31,8 +31,9 @@ wpsite wp acme post get 42 --field=post_content     # the stored markup, not the
 
 ## 2. Back up first
 
-`wpsite wp` and `wpsite sh` refuse any command that can change the site unless a database
-backup of that environment less than 2 hours old exists (exit code 3). That gate is the floor,
+`wpsite wp` refuses any command that can change the site, `wpsite sh` any command not on its
+small read-only list, and `wpsite deploy` every upload, unless a database backup of that
+environment less than 2 hours old exists (exit code 3). That gate is the floor,
 not the plan. Back up deliberately before each change:
 
 ```bash
@@ -95,12 +96,12 @@ wpsite wp acme --input projects/acme/work/page-42.html post update 42 - --user=<
   wpsite sh acme 'rm -rf wp-content/et-cache/42'   # Divi rebuilds it on the next view
   wpsite purge acme
   ```
-  (Run `wpsite sh acme pwd` first: the path above assumes the shell starts in the WordPress
-  root. The contract fixes that only for `deploy` and `pull`.)
+  (`wpsite sh` and `wpsite wp` both start in the WordPress root, so paths are relative to it.)
   Then look at the page; this failure produces valid HTML that passes every text check.
 - **Large or awkward values** (the Customizer's Additional CSS is often tens of KB): change them
   server-side in PHP rather than shell-escaping the blob. Write a small PHP file, deploy it to a
-  scratch path or pass it on STDIN, and make it idempotent with a marker string so a re-run does
+  scratch path or feed it on standard input (`wpsite wp acme --input FILE …`,
+  `wpsite sh acme --input FILE '<cmd>'`), and make it idempotent with a marker string so a re-run does
   not append twice. Read with `wp_get_custom_css()`, write with `wp_update_custom_css_post()`.
 - **Run PHP files with `wp eval-file --use-include`.** Without it, WP-CLI evaluates the file's
   contents with `?>` prepended; a file starting with `declare(strict_types=1);` then fatals
@@ -112,9 +113,13 @@ wpsite wp acme --input projects/acme/work/page-42.html post update 42 - --user=<
   it. Use `--raw` only for `true`, `false`, numbers and real PHP expressions. Back up
   `wp-config.php` with `wpsite backup acme --file wp-config.php` first; if it does fatal,
   restore that file with `wpsite deploy`.
-- **REST API instead of WP-CLI:** the account's normal password does not work. Use an
-  Application Password (Users → profile → Application Passwords) over Basic auth; whether rich
-  markup survives still depends on that user having `unfiltered_html`.
+- **REST API instead of WP-CLI:** the account's normal password does not work; it needs an
+  Application Password over Basic auth. The studio's `hardening.php` turns Application Passwords
+  off by default, so on a hardened site the section is missing from the profile. Re-enable them
+  only if the operator agrees something outside needs the REST API: set
+  `WPSTUDIO_DISABLE_APP_PASSWORDS` to `false` (see `wp-studio:updates-and-hardening`), redeploy,
+  then create one under Users → profile → Application Passwords. Whether rich markup survives
+  still depends on that user having `unfiltered_html`.
 
 ## 6. Deploying code: only `wpsite deploy`
 
@@ -122,28 +127,39 @@ Theme files, plugins, mu-plugins and any PHP go up with `wpsite deploy`, never b
 `wpsite sh`:
 
 ```bash
-wpsite deploy acme:staging plugin/my-mu.php wp-content/mu-plugins/my-mu.php
+wpsite deploy acme:staging projects/acme/work/my-mu.php wp-content/mu-plugins/my-mu.php
 ```
 
-What it does, and why each step exists:
+It needs a fresh `wpsite backup` like any change. What it does, and why each step exists:
 
-- **Lints PHP on the server before it goes live.** One syntax error in an mu-plugin or active
-  theme file takes down the whole site, and an mu-plugin cannot be deactivated from wp-admin.
-  Run `php -l` locally too.
-- **Backs up the previous version** so a bad deploy is reversible.
+- **Uploads into a private staging folder in the SSH user's home**, outside the website, so
+  unchecked code can never be requested over the web or loaded by WordPress. The transfer is a
+  tar stream over the same SSH connection `wpsite` uses for everything (not rsync). If the upload
+  dies part-way, nothing on the site has changed; deploy again, or in smaller parts.
+- **Lints PHP there with the server's own PHP before it goes near the site.** One syntax error in
+  an mu-plugin or active theme file takes down the whole site, and an mu-plugin cannot be
+  deactivated from wp-admin. Run `php -l` locally too.
+- **Saves the current version locally** (under `projects/<slug>/backups/<env>/files/`; a folder
+  as a `.tar`), so a bad deploy is reversible.
+- **Copies the new version beside the destination under a name WordPress never loads, then
+  renames it into place**, so the site never runs a half-copied file or folder.
 - **Resets PHP's opcode cache.** On managed hosts PHP-FPM kept serving the old compiled code
   for about a minute after an upload, and a new file calling a new method returned HTTP 500 in
   that window. WP-CLI cannot fix this: `opcache_reset()` only clears the cache of the PHP process
   that calls it, and the CLI's cache is separate from PHP-FPM's.
 - **Verifies checksums**, so "uploaded" means "the server has exactly these bytes".
-- **Transfers large trees robustly.** Piping a ~20 MB archive over a managed host's SSH died
-  mid-stream, and so did `scp`; `rsync` over the same connection worked and resumes.
 
 Deploy gotchas:
 
-- **Never delete a theme or plugin directory and restore it in one step.** A transfer that dies
-  after the delete leaves the site with no active theme. Deploy over the top; if old files must
-  go, remove them after the new version is verified.
+- **A folder deploy replaces the whole destination folder.** Files on the server that are not in
+  your local copy are gone afterwards (the previous version is in the saved `.tar`). So deploy
+  single files, or a complete local copy of the folder: `wpsite pull` it first, change it, deploy
+  it back. The WordPress root and its shared folders (`wp-admin`, `wp-includes`, `wp-content` and
+  its `plugins`, `themes`, `uploads`, `mu-plugins`, `languages`, `upgrade`) cannot be replaced
+  wholesale; `wpsite` refuses, and you deploy into a subfolder such as
+  `wp-content/themes/<theme>` or a single file instead.
+- **Never delete a theme or plugin folder before deploying it.** The deploy already swaps the
+  folder in one rename; deleting first leaves the site with no active theme if anything fails.
 - **Block themes cache their pattern-file list.** A new file in `patterns/` stays invisible
   until the cache is cleared (`WP_Theme::delete_pattern_cache()`, WordPress 6.4+) — make it part of the deploy:
   `wpsite wp acme eval 'wp_get_theme()->delete_pattern_cache();'`

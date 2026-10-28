@@ -1,14 +1,14 @@
 ---
 name: updates-and-hardening
-description: Keep a client WordPress site patched and hardened without anyone watching it. Covers automatic updates enforced in code (with a hold only for cross-major page-builder jumps), the update traps (paid/free plugin pairs, expired licences, premium updaters that never run unattended), application hardening, blocking PHP in uploads, and patching the server's PHP. Use when setting up or reviewing a site's update policy, when someone suggests turning auto-updates off, when a vulnerability notice names a plugin, theme or PHP version, when an update "did nothing", or after a malware cleanup.
+description: Keep a client WordPress site patched and hardened without anyone watching it. Covers automatic updates enforced in code (with holds only for cross-major page-builder jumps and, after a rollback, the broken version), the update traps (paid/free plugin pairs, expired licences, premium updaters that never run unattended), application hardening, blocking PHP in uploads, and patching the server's PHP. Use when setting up or reviewing a site's update policy, when someone suggests turning auto-updates off, when a vulnerability notice names a plugin, theme or PHP version, when an update "did nothing" or broke something and must be rolled back, or after a malware cleanup.
 ---
 
 # Updates and hardening
 
 **Rule: automatic updates stay on for core, every plugin and every theme, enforced in code, and
-nothing you add may block them.** The only exception is a cross-major upgrade of a page builder
+nothing you add may block them.** The only exceptions are a cross-major upgrade of a page builder
 (or a free plugin whose paid half is version-locked to it), which is held for a person to test on
-staging. Hardening that stops a site from patching itself is negative security.
+staging, and a temporary hold on a release you just rolled back from. Hardening that stops a site from patching itself is negative security.
 
 Older advice to "turn WordPress auto-update OFF on production" and pin the theme is wrong for an
 unattended site. It trades a rare broken layout for months of known holes. Hold the one risky
@@ -35,6 +35,7 @@ This folder ships two complete, `php -l`-clean files. Install both; each reports
    likely to change:
    - `WPSTUDIO_HOLD_MAJOR_THEMES`, e.g. `array( 'Divi' )`: the theme folder name of a page builder.
    - `WPSTUDIO_HOLD_MAJOR_PLUGINS`, e.g. `array( 'elementor/elementor.php' )`: plugin file.
+   - `WPSTUDIO_HOLD_VERSIONS`, normally empty: a temporary hold after a rollback (below).
    - `WPSTUDIO_DISABLE_APP_PASSWORDS`: see Hardening.
    - `WPSTUDIO_LOGIN_THROTTLE`: leave `0` if a security plugin already throttles logins.
 2. Deploy (it lints on the server, backs up, resets opcache and verifies):
@@ -68,6 +69,44 @@ A held major upgrade on offer is also reported as a critical Site Health item, s
 decision and never a silent skip. Tell the operator: "Version N of the page builder is out. It's a
 big rewrite, so it doesn't install itself. I'll test it on staging first."
 
+## Rolling back a broken release
+
+**Rule: a rollback is always paired with a version hold, and the hold comes off as soon as a fixed
+release ships.** The policy forces every same-major update, so without a hold WordPress
+re-installs the broken version at its next update check (core checks twice a day).
+
+`WPSTUDIO_HOLD_VERSIONS` in `update-policy.php` maps a plugin file or theme folder to the version
+to refuse: `'5.7.0'` holds exactly that version; `'>=5.7.0'` holds it and every later one. Use
+`>=` when you do not yet know which release fixes the bug; use the exact form when the vendor has
+already shipped the fix in the next release. A hold stops automatic updates only; an update run by
+hand still installs. `5.7` and `5.7.0` count as the same version.
+
+1. Back up, then set the hold **before** rolling back, in the project's copy, and deploy it:
+   ```
+   wpsite backup acme
+   # in projects/acme/work/mu-plugins/wpstudio-update-policy.php:
+   #   define( 'WPSTUDIO_HOLD_VERSIONS', array( 'Divi' => '>=5.7.0' ) );
+   wpsite deploy acme projects/acme/work/mu-plugins/wpstudio-update-policy.php wp-content/mu-plugins/wpstudio-update-policy.php
+   ```
+2. Prove it: the failures list prints empty and the hold is listed.
+   ```
+   wpsite wp acme eval 'print_r( wpstudio_update_policy_failures() ); print_r( wpstudio_active_version_holds() );'
+   ```
+   A misspelled folder or file name is reported as a failure ("names no installed theme folder or
+   plugin file"), not silently ignored.
+3. Roll back: a wordpress.org plugin with `wpsite wp acme plugin update <slug> --version=<x.y.z>`;
+   a premium theme or plugin from the vendor's zip (Divi: see `wp-studio:divi`).
+4. Write the hold, its reason and the date in the project's `CLAUDE.md`. Site Health shows "A
+   version hold is in effect" and administrators see a notice listing it, so it is never
+   forgotten.
+5. **When the vendor ships a fix:** test it on staging, then delete the entry from
+   `WPSTUDIO_HOLD_VERSIONS`, redeploy, and re-run step 2 (the hold no longer listed). The fixed
+   release then installs on the normal automatic path. Remove the line from `CLAUDE.md`.
+
+Plain version for the operator: *"The last update broke the header, so I put the previous version
+back and told the site not to reinstall the broken one. When the fix comes out I'll test it and
+let updates run again."*
+
 ## Update traps
 
 **1. Free and paid plugin pairs are version-locked.** Several products ship a free plugin plus a
@@ -79,8 +118,9 @@ wpsite sh acme 'grep -m8 -E "^ \* (Version|Requires|.*tested up to)" wp-content/
 wpsite wp acme plugin list --fields=name,version,update_version
 ```
 If the paid half shows no `update_version`, do not move the free half across a major; add the
-free plugin to `WPSTUDIO_HOLD_MAJOR_PLUGINS`. If it already moved, roll back with an explicit
-version: `wpsite wp acme plugin update <free-slug> --version=<x.y.z>`.
+free plugin to `WPSTUDIO_HOLD_MAJOR_PLUGINS`. If it already moved, roll it back as in
+"Rolling back a broken release" below; a same-major move needs the version hold, or the next
+automatic update undoes the rollback.
 
 **2. An expired licence looks like "up to date".** A blank `update_version` on every commercial
 plugin means the licences are expired or not activated, not that the plugins are current. Check
@@ -127,17 +167,23 @@ once the policy forces updates, but they make the inventory lie; clean them as p
 `hardening.php` applies these, each switchable in its config block:
 
 - XML-RPC off (and pingbacks, the `X-Pingback` header, the RSD link).
-- Username enumeration blocked: `?author=N` redirects home; `/wp/v2/users` hidden from logged-out
-  visitors.
+- Username enumeration blocked: a front-end `?author=N` author archive redirects home (302)
+  before WordPress's canonical redirect can reveal `/author/<username>/`; `/wp/v2/users` is hidden
+  from logged-out visitors. REST queries such as `/wp-json/wp/v2/posts?author=1` and wp-admin
+  screens are untouched.
 - WordPress version removed from the page head and feeds.
 - **Application Passwords off.** The studio reaches sites over SSH and WP-CLI only, so nothing needs
   them, and each one is a standing credential. If an outside service (a mobile app, an automation
   tool) needs the REST API with a password, set `WPSTUDIO_DISABLE_APP_PASSWORDS` to `false` in the
-  deployed copy and redeploy.
+  project's copy of `hardening.php` (or define it `false` in `wp-config.php`) and redeploy; the
+  Application Passwords section then reappears on the user's profile.
 - Security headers on front-end pages. First run `curl -sI https://<domain>/` and drop any header
   the host already sends. Strict-Transport-Security is deliberately not sent: it stays in browsers
   for its full lifetime and makes a later certificate problem an outage. That is the owner's call.
-- Generic login error ("Invalid login."), so a failed login never confirms a username.
+- Generic login error ("Invalid username or password.") in place of WordPress's wrong-username,
+  unknown-email and wrong-password messages, so a failed login never confirms a username. Every
+  other login message (the throttle's lockout, a security plugin's) and registration errors pass
+  through unchanged.
 - `DISALLOW_FILE_EDIT` (dashboard code editors off; costs nothing, blocks no updates).
 - Optional login throttle. Before turning it on, confirm `REMOTE_ADDR` is the visitor's address
   and not a proxy's; otherwise one attacker locks everyone out. Never key it on
@@ -189,8 +235,10 @@ Keep form plugins on automatic updates; that is the patch that matters when the 
 
 ### Patch the server's PHP too
 
-A PHP-engine vulnerability (for example the October 2026 unauthenticated RCE fixed in PHP 8.5.12,
-8.4.27, 8.3.36 and 8.2.35) cannot be fixed by any WordPress update. The host must update PHP and
+A PHP-engine vulnerability cannot be fixed by any WordPress update. Example: the php.net security
+advisory of 2026-10-21 ("Critical remote code execution vulnerabilities, update now",
+https://www.php.net/archive/2026.php#2026-10-21-5; CVE-2026-109618 and CVE-2026-109619) fixed in
+PHP 8.5.12, 8.4.27, 8.3.36 and 8.2.35. The host must update PHP and
 restart PHP-FPM. On managed hosts, the CLI `php -v` and `wp cli info` are **not** the web PHP;
 several FPM versions are installed and the site uses the one its hosting dashboard selects. On the
 two managed hosts checked (2026-10), verify every installed FPM build, and that each FPM master

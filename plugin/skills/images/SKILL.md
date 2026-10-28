@@ -28,7 +28,7 @@ magick INPUT -auto-orient -resize '1600x1600>' -strip -quality 82 OUTPUT.webp
 Upload the file to a holding folder, import it, then remove the holding folder:
 
 ```bash
-wpsite deploy acme work/images/front-entrance.webp wp-content/wpstudio-import/front-entrance.webp
+wpsite deploy acme projects/acme/work/images/front-entrance.webp wp-content/wpstudio-import/front-entrance.webp
 wpsite wp acme media import wp-content/wpstudio-import/front-entrance.webp --porcelain   # prints the attachment ID
 wpsite sh acme 'rm -r wp-content/wpstudio-import'
 ```

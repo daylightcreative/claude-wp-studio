@@ -107,9 +107,10 @@ handle registered with `src` false (the pattern core uses for its own global sty
 `projects/<slug>/work/`, rename it with the project prefix, and deploy:
 
 ```bash
-php -l work/acme-custom-styles.php
-wpsite deploy acme work/acme-custom-styles.php wp-content/mu-plugins/acme-custom-styles.php
-wpsite deploy acme work/acme-custom-styles.css wp-content/mu-plugins/acme-custom-styles.css
+php -l projects/acme/work/acme-custom-styles.php
+wpsite backup acme
+wpsite deploy acme projects/acme/work/acme-custom-styles.php wp-content/mu-plugins/acme-custom-styles.php
+wpsite deploy acme projects/acme/work/acme-custom-styles.css wp-content/mu-plugins/acme-custom-styles.css
 wpsite purge acme
 ```
 

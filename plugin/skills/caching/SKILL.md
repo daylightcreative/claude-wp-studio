@@ -64,7 +64,7 @@ curl -sI "https://example.com/?cb=$RANDOM" | grep -iE 'server|cache|x-kinsta|ki-
   cache; `wp kinsta cache purge --all` clears everything (Kinsta docs). Without it, the command
   does not exist ("'kinsta' is not a registered wp command") and the purge has to happen in
   MyKinsta → the site → the environment → Tools → Clear cache. Check:
-  `wpsite wp acme mu-plugin list`.
+  `wpsite wp acme plugin list --status=must-use` (WP-CLI has no `mu-plugin` command).
 - **The WP-CLI purge fails if `/kinsta-clear-cache-all/` is password-protected or restricted**
   (Kinsta docs) — relevant to a password-protected staging site.
 - **Manual purges are rate-limited to one every 10 seconds**, from MyKinsta, wp-admin or

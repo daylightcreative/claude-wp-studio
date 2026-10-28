@@ -89,9 +89,12 @@ so without SSH:
   over SFTP alone is UNVERIFIED — `wpsite check` will say what it could do; don't assume.
 - **What the operator can still do:** the host panel's own backups and one-click staging, the
   host's file manager, and wp-admin.
-- **The REST API** works from outside with an Application Password (Users → profile →
-  Application Passwords; the normal password is refused). It covers content, not files, and rich
-  markup still depends on the user having `unfiltered_html`.
+- **The REST API** works from outside with an Application Password (the normal password is
+  refused). The studio's `hardening.php` turns Application Passwords off by default; to use the
+  REST API, set `WPSTUDIO_DISABLE_APP_PASSWORDS` to `false` in that file (see
+  `wp-studio:updates-and-hardening`). Without SSH the operator places that change with the host's
+  file manager, then creates the password under Users → profile → Application Passwords. It
+  covers content, not files, and rich markup still depends on the user having `unfiltered_html`.
 - **Recommend asking the host to enable SSH.** Plain version: *"This hosting plan doesn't allow
   the secure command-line access I use to back up and change the site safely. Most hosts can
   switch it on, sometimes on a higher plan. Can you ask them?"*

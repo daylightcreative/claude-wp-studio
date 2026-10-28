@@ -2,7 +2,8 @@
 /**
  * Plugin Name: WP Studio Update Policy
  * Description: Forces automatic updates on for WordPress core, every plugin, every theme and
- *              translations, and holds back only the cross-major upgrades you list below.
+ *              translations, and holds back only the cross-major upgrades and the specific
+ *              versions (after a rollback) you list below.
  *              Enforced in code, so it cannot be switched off from the dashboard: WordPress
  *              treats a non-null answer from the auto_update_{$type} filter as "forced" and
  *              removes the per-item toggle. Asserted by a Site Health test and an admin notice;
@@ -49,6 +50,25 @@ if ( ! defined( 'WPSTUDIO_HOLD_MAJOR_THEMES' ) ) {
  */
 if ( ! defined( 'WPSTUDIO_HOLD_MAJOR_PLUGINS' ) ) {
 	define( 'WPSTUDIO_HOLD_MAJOR_PLUGINS', array() );
+}
+
+/*
+ * Temporary holds on specific versions, for the days between rolling back a broken release and
+ * the release that fixes it. Without a hold, the next automatic update re-installs the version
+ * you just rolled back from (same-major updates are never held otherwise).
+ *
+ * Key: the plugin file ('folder/file.php', as in WPSTUDIO_HOLD_MAJOR_PLUGINS) or the theme folder
+ * (its stylesheet, e.g. 'Divi'). Value, one of two forms:
+ *   '5.7.0'    hold exactly this version; any other version still installs automatically.
+ *   '>=5.7.0'  hold this version and every later one, until you remove the hold.
+ * Example: array( 'Divi' => '>=5.7.0' ).
+ *
+ * A hold stops automatic updates only; an update run by hand (wp theme update) still installs.
+ * Every active hold is listed in Site Health and an admin notice until it is removed. Remove it
+ * as soon as a fixed release has been tested on staging.
+ */
+if ( ! defined( 'WPSTUDIO_HOLD_VERSIONS' ) ) {
+	define( 'WPSTUDIO_HOLD_VERSIONS', array() );
 }
 
 /* Allow automatic MAJOR WordPress core upgrades (minor and security releases are always on). */
@@ -112,7 +132,49 @@ function wpstudio_is_cross_major( $installed, $offered ) {
 }
 
 /**
- * Plugin auto-update decision: always update, except a cross-major jump of a held plugin.
+ * Parse one WPSTUDIO_HOLD_VERSIONS rule.
+ *
+ * @param mixed $rule '5.7.0' (exactly) or '>=5.7.0' (this and later).
+ * @return array|null array( operator, version ) for version_compare(), or null when unreadable.
+ */
+function wpstudio_parse_hold_rule( $rule ) {
+	if ( ! is_string( $rule ) || ! preg_match( '/^\s*(>=)?\s*(\d+(?:\.[0-9A-Za-z-]+)*)\s*$/', $rule, $m ) ) {
+		return null;
+	}
+	return array( '' === $m[1] ? '==' : '>=', $m[2] );
+}
+
+/**
+ * True when an offered version of a plugin file or theme folder is under a version hold.
+ *
+ * @param string $id      Plugin file or theme folder.
+ * @param string $offered Offered version.
+ * @return bool
+ */
+function wpstudio_is_version_held( $id, $offered ) {
+	$holds = (array) WPSTUDIO_HOLD_VERSIONS;
+	if ( ! isset( $holds[ $id ] ) || '' === (string) $offered ) {
+		return false;
+	}
+	$rule = wpstudio_parse_hold_rule( $holds[ $id ] );
+	return null !== $rule && version_compare( wpstudio_trim_version( (string) $offered ), wpstudio_trim_version( $rule[1] ), $rule[0] );
+}
+
+/**
+ * Drop trailing ".0" parts, so "5.7" and "5.7.0" compare as equal. version_compare() alone ranks
+ * "5.7" below "5.7.0", and update offers do use the short form (a theme offered as "1.5"), so a
+ * '>=5.7.0' hold would otherwise let "5.7" through.
+ *
+ * @param string $version A version string.
+ * @return string
+ */
+function wpstudio_trim_version( $version ) {
+	return (string) preg_replace( '/^(\d+)((?:\.\d+)*?)(?:\.0+)+$/', '$1$2', trim( $version ) );
+}
+
+/**
+ * Plugin auto-update decision: always update, except a held version or a cross-major jump of a
+ * plugin whose major upgrades are held.
  *
  * @param bool|null $update Core's current intent (null when only asking whether it is forced).
  * @param object    $item   The update offer.
@@ -120,6 +182,9 @@ function wpstudio_is_cross_major( $installed, $offered ) {
  */
 function wpstudio_auto_update_plugin( $update, $item ) {
 	$file = isset( $item->plugin ) ? (string) $item->plugin : '';
+	if ( isset( $item->new_version ) && wpstudio_is_version_held( $file, (string) $item->new_version ) ) {
+		return false;
+	}
 	if ( in_array( $file, (array) WPSTUDIO_HOLD_MAJOR_PLUGINS, true ) && isset( $item->new_version ) ) {
 		if ( wpstudio_is_cross_major( wpstudio_installed_plugin_version( $file ), (string) $item->new_version ) ) {
 			return false;
@@ -130,7 +195,8 @@ function wpstudio_auto_update_plugin( $update, $item ) {
 add_filter( 'auto_update_plugin', 'wpstudio_auto_update_plugin', 10, 2 );
 
 /**
- * Theme auto-update decision: always update, except a cross-major jump of a held theme.
+ * Theme auto-update decision: always update, except a held version or a cross-major jump of a
+ * theme whose major upgrades are held.
  *
  * @param bool|null $update Core's current intent (null when only asking whether it is forced).
  * @param object    $item   The update offer.
@@ -138,6 +204,9 @@ add_filter( 'auto_update_plugin', 'wpstudio_auto_update_plugin', 10, 2 );
  */
 function wpstudio_auto_update_theme( $update, $item ) {
 	$slug = isset( $item->theme ) ? (string) $item->theme : '';
+	if ( isset( $item->new_version ) && wpstudio_is_version_held( $slug, (string) $item->new_version ) ) {
+		return false;
+	}
 	if ( in_array( $slug, (array) WPSTUDIO_HOLD_MAJOR_THEMES, true ) && isset( $item->new_version ) ) {
 		if ( wpstudio_is_cross_major( wpstudio_installed_theme_version( $slug ), (string) $item->new_version ) ) {
 			return false;
@@ -214,11 +283,96 @@ function wpstudio_update_policy_failures() {
 		$failures = array_merge( $failures, wpstudio_hold_failures( 'plugin', (string) $file, wpstudio_installed_plugin_version( (string) $file ) ) );
 	}
 
+	// The version holds, proved by behaviour: the held version must be refused.
+	foreach ( (array) WPSTUDIO_HOLD_VERSIONS as $id => $rule ) {
+		$failures = array_merge( $failures, wpstudio_version_hold_failures( (string) $id, $rule ) );
+	}
+
 	if ( ! function_exists( 'wpstudio_hardening_failures' ) ) {
 		$failures[] = 'The hardening must-use plugin (wpstudio-hardening.php) is not loaded.';
 	}
 
 	return $failures;
+}
+
+/**
+ * Whether a hold key names an installed theme or plugin.
+ *
+ * @param string $id Theme folder or plugin file.
+ * @return string 'theme', 'plugin' or '' when neither is installed.
+ */
+function wpstudio_hold_type( $id ) {
+	if ( '' !== wpstudio_installed_theme_version( $id ) ) {
+		return 'theme';
+	}
+	if ( '' !== wpstudio_installed_plugin_version( $id ) ) {
+		return 'plugin';
+	}
+	return '';
+}
+
+/**
+ * Prove that one version hold is readable, names something installed, and refuses its version.
+ *
+ * @param string $id   Plugin file or theme folder.
+ * @param mixed  $rule The configured rule.
+ * @return string[]
+ */
+function wpstudio_version_hold_failures( $id, $rule ) {
+	$parsed = wpstudio_parse_hold_rule( $rule );
+	if ( null === $parsed ) {
+		return array( sprintf( 'The version hold for "%s" is unreadable. Use \'5.7.0\' (exactly that version) or \'>=5.7.0\' (that version and later).', $id ) );
+	}
+	$type = wpstudio_hold_type( $id );
+	if ( '' === $type ) {
+		return array( sprintf( 'The version hold for "%s" names no installed theme folder or plugin file, so it holds nothing. Fix the name or remove the hold.', $id ) );
+	}
+	$probe = (object) array(
+		$type         => $id,
+		'new_version' => $parsed[1],
+	);
+	if ( false !== apply_filters( "auto_update_{$type}", null, $probe ) ) {
+		return array( sprintf( '%s "%s" version %s is meant to be held but would install automatically.', ucfirst( $type ), $id, $parsed[1] ) );
+	}
+	return array();
+}
+
+/**
+ * Every version hold in effect, so a hold is visible until someone removes it.
+ *
+ * @return string[] Lines such as 'Theme "Divi": 5.7.0 and later held (installed 5.6.2; 5.7.4 on offer, not installing)'.
+ */
+function wpstudio_active_version_holds() {
+	$lines   = array();
+	$themes  = get_site_transient( 'update_themes' );
+	$plugins = get_site_transient( 'update_plugins' );
+	foreach ( (array) WPSTUDIO_HOLD_VERSIONS as $id => $rule ) {
+		$id     = (string) $id;
+		$parsed = wpstudio_parse_hold_rule( $rule );
+		$type   = wpstudio_hold_type( $id );
+		if ( null === $parsed || '' === $type ) {
+			continue; // Reported as a failure instead.
+		}
+		if ( 'theme' === $type ) {
+			$installed = wpstudio_installed_theme_version( $id );
+			$offer     = isset( $themes->response[ $id ]['new_version'] ) ? (string) $themes->response[ $id ]['new_version'] : '';
+		} else {
+			$installed = wpstudio_installed_plugin_version( $id );
+			$offer     = isset( $plugins->response[ $id ]->new_version ) ? (string) $plugins->response[ $id ]->new_version : '';
+		}
+		$line = sprintf(
+			'%s "%s": %s held (installed %s',
+			ucfirst( $type ),
+			$id,
+			'>=' === $parsed[0] ? $parsed[1] . ' and later' : 'version ' . $parsed[1],
+			$installed
+		);
+		if ( '' !== $offer ) {
+			$line .= wpstudio_is_version_held( $id, $offer ) ? sprintf( '; %s on offer, not installing', $offer ) : sprintf( '; %s on offer, will install', $offer );
+		}
+		$lines[] = $line . ')';
+	}
+	return $lines;
 }
 
 /**
@@ -240,7 +394,8 @@ function wpstudio_hold_failures( $type, $id, $installed ) {
 		$type         => $id,
 		'new_version' => $installed,
 	);
-	if ( true !== apply_filters( "auto_update_{$type}", null, $same_major ) ) {
+	// A version hold covering the installed version legitimately refuses this probe.
+	if ( ! wpstudio_is_version_held( $id, $installed ) && true !== apply_filters( "auto_update_{$type}", null, $same_major ) ) {
 		$failures[] = sprintf( '%s "%s" is not auto-updating within its current major version.', ucfirst( $type ), $id );
 	}
 
@@ -305,6 +460,7 @@ add_filter(
 function wpstudio_update_policy_site_health() {
 	$failures = wpstudio_update_policy_failures();
 	$held     = wpstudio_held_upgrades();
+	$holds    = wpstudio_active_version_holds();
 
 	$result = array(
 		'label'       => 'Automatic updates are enforced',
@@ -334,6 +490,18 @@ function wpstudio_update_policy_site_health() {
 			. '</li></ul>';
 	}
 
+	if ( ! $failures && $holds ) {
+		if ( 'good' === $result['status'] ) {
+			$result['status']         = 'recommended';
+			$result['label']          = 'A version hold is in effect';
+			$result['badge']['color'] = 'orange';
+			$result['description']    = '';
+		}
+		$result['description'] .= '<p>These versions are deliberately not installed automatically (WPSTUDIO_HOLD_VERSIONS). Remove each hold once a fixed release has been tested on staging:</p><ul><li>'
+			. implode( '</li><li>', array_map( 'esc_html', $holds ) )
+			. '</li></ul>';
+	}
+
 	return $result;
 }
 
@@ -345,6 +513,7 @@ add_action(
 		}
 		$failures = wpstudio_update_policy_failures();
 		$held     = wpstudio_held_upgrades();
+		$holds    = wpstudio_active_version_holds();
 
 		if ( $failures ) {
 			echo '<div class="notice notice-error"><p><strong>Automatic updates are not fully enforced on this site.</strong></p><ul style="list-style:disc;margin-left:2em">';
@@ -355,6 +524,13 @@ add_action(
 		} elseif ( $held ) {
 			echo '<div class="notice notice-warning"><p><strong>Major upgrades waiting for review</strong> (held on purpose; test on staging first):</p><ul style="list-style:disc;margin-left:2em">';
 			foreach ( $held as $line ) {
+				echo '<li>' . esc_html( $line ) . '</li>';
+			}
+			echo '</ul></div>';
+		}
+		if ( ! $failures && $holds ) {
+			echo '<div class="notice notice-warning"><p><strong>Version holds in effect</strong> (WPSTUDIO_HOLD_VERSIONS; remove each once a fixed release is tested on staging):</p><ul style="list-style:disc;margin-left:2em">';
+			foreach ( $holds as $line ) {
 				echo '<li>' . esc_html( $line ) . '</li>';
 			}
 			echo '</ul></div>';

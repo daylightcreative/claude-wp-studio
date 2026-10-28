@@ -105,7 +105,9 @@ function wps_callback_file( $callback ) {
 		if ( is_array( $callback ) && 2 === count( $callback ) ) {
 			$ref = new ReflectionMethod( $callback[0], $callback[1] );
 		} elseif ( is_string( $callback ) && false !== strpos( $callback, '::' ) ) {
-			$ref = new ReflectionMethod( $callback );
+			// The one-argument 'Class::method' form is deprecated in PHP 8.4; split it instead.
+			list( $class, $method ) = explode( '::', $callback, 2 );
+			$ref                    = new ReflectionMethod( $class, $method );
 		} elseif ( is_string( $callback ) || $callback instanceof Closure ) {
 			$ref = new ReflectionFunction( $callback );
 		} else {

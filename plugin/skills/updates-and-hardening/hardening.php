@@ -17,7 +17,8 @@
  * every automatic update, security releases included, and on an unattended site that is
  * negative security. The posture check below fails if it is set.
  *
- * Hook names verified against WordPress 6.9.1 source and developer.wordpress.org (2026-10-28).
+ * Hook names verified against WordPress 6.9.1 source and developer.wordpress.org (2026-10-28);
+ * template_redirect, redirect_canonical() and wp_login_errors re-checked against 6.9.4 source.
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -118,14 +119,28 @@ if ( WPSTUDIO_DISABLE_XMLRPC ) {
 }
 
 if ( WPSTUDIO_BLOCK_USER_ENUMERATION ) {
+	/*
+	 * ?author=N on the front end is an author archive request, and core's redirect_canonical()
+	 * (template_redirect, priority 10) answers it with a redirect to /author/<username>/, which
+	 * reveals the login name. Act at priority 1, before that, and only when the main query really
+	 * is an author archive built from a numeric ?author= (the same test redirect_canonical() uses
+	 * in wp-includes/canonical.php, WordPress 6.9), so REST requests (handled at
+	 * parse_request, before template_redirect) and every other URL that carries an author
+	 * parameter (/wp-json/wp/v2/posts?author=1, wp-admin/edit.php?author=1) keep working.
+	 * A 302, not a 301: a permanent redirect is cached by browsers and outlives the setting.
+	 */
 	add_action(
-		'init',
+		'template_redirect',
 		function () {
-			if ( ! is_admin() && isset( $_GET['author'] ) && preg_match( '/^\d+$/', (string) wp_unslash( $_GET['author'] ) ) ) { // phpcs:ignore WordPress.Security.NonceVerification
-				wp_safe_redirect( home_url( '/' ), 301 );
+			if ( ! is_author() || ! isset( $_GET['author'] ) || ! is_scalar( $_GET['author'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+				return;
+			}
+			if ( preg_match( '/^\d+$/', (string) wp_unslash( $_GET['author'] ) ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+				wp_safe_redirect( home_url( '/' ), 302 );
 				exit;
 			}
-		}
+		},
+		1
 	);
 	add_filter(
 		'rest_endpoints',
@@ -159,11 +174,30 @@ add_action(
 	}
 );
 
-/* Never say whether a username exists. */
+/*
+ * Never say whether a username exists. wp_login_errors (wp-login.php, WordPress 3.6+) filters the
+ * WP_Error shown on the login screen, so the generic message replaces only the three errors that
+ * tell a username apart from a password: invalid_username, invalid_email and incorrect_password
+ * (wp_authenticate_username_password() and wp_authenticate_email_password(), priority 20 on
+ * authenticate). Every other error, such as the login throttle's lockout or a security plugin's
+ * message, passes through so the visitor learns why the login was refused. Registration errors
+ * never pass through this filter.
+ */
 add_filter(
-	'login_errors',
-	function () {
-		return __( 'Invalid login.' );
+	'wp_login_errors',
+	function ( $errors ) {
+		if ( ! is_wp_error( $errors ) ) {
+			return $errors;
+		}
+		$revealing = array_intersect( $errors->get_error_codes(), array( 'invalid_username', 'invalid_email', 'incorrect_password' ) );
+		if ( ! $revealing ) {
+			return $errors;
+		}
+		foreach ( $revealing as $code ) {
+			$errors->remove( $code );
+		}
+		$errors->add( 'wpstudio_invalid_login', __( '<strong>Error:</strong> Invalid username or password.' ) );
+		return $errors;
 	}
 );
 

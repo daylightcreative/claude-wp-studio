@@ -138,16 +138,26 @@ reason for it. The history behind it is still worth knowing:
 
 After any Divi update, check the header, nav and logo at desktop and phone widths.
 
-**Installing an exact version** (rollback): Divi is not on wordpress.org. Download the exact
-version from the Elegant Themes account, check `Divi/style.css` inside the zip for the version,
-then upload and install it, clear the whole `et-cache` folder and purge:
+**Rolling back a broken release.** Set the version hold first, or the policy's next automatic
+update re-installs the broken release (hold, verify, remove: wp-studio:updates-and-hardening,
+"Rolling back a broken release"). For the history above that is
+`define( 'WPSTUDIO_HOLD_VERSIONS', array( 'Divi' => '>=5.7.0' ) );`, deployed before the rollback.
+
+Then install the exact version. Divi is not on wordpress.org: download it from the Elegant Themes
+account, check `Divi/style.css` inside the zip for the version, then upload and install it, clear
+the whole `et-cache` folder and purge:
 
 ```bash
-wpsite deploy acme work/Divi-5.7.4.zip wp-content/upgrade-studio/Divi-5.7.4.zip
-wpsite wp acme theme install wp-content/upgrade-studio/Divi-5.7.4.zip --force
+wpsite backup acme
+wpsite deploy acme projects/acme/work/Divi-5.6.2.zip wp-content/upgrade-studio/Divi-5.6.2.zip
+wpsite wp acme theme install wp-content/upgrade-studio/Divi-5.6.2.zip --force
 wpsite sh acme 'rm -rf wp-content/et-cache/* wp-content/upgrade-studio'
 wpsite purge acme
 ```
+
+**When the fix ships** (5.7.4 in the history above): test it on staging, remove the `Divi`
+entry from `WPSTUDIO_HOLD_VERSIONS`, redeploy the update policy, and let the automatic update
+install it (or update by hand on live right away). Then re-check the header, nav and logo.
 
 The licence lives in the `et_automatic_updates_options` option (a username and API key). Treat
 the key as a secret: never print it into the transcript.

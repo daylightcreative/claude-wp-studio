@@ -126,7 +126,7 @@ Combine: the old `sitemap.xml`, the Search Console page export, the Wayback CDX 
 logs if the host keeps them (those show what got traffic).
 
 ```bash
-curl -s 'http://web.archive.org/cdx/search/cdx?url=example.com/*&fl=original&collapse=urlkey&filter=statuscode:200&output=json' > work/wayback-urls.json
+curl -s 'http://web.archive.org/cdx/search/cdx?url=example.com/*&fl=original&collapse=urlkey&filter=statuscode:200&output=json' > projects/acme/work/wayback-urls.json
 ```
 
 Crawl staging, request every expected path, and deliver a **URL parity report** (path, old
