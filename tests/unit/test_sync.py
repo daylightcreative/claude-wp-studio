@@ -45,8 +45,7 @@ def test_v1_studio_migrates_without_losing_operator_files(tmp_path):
     (secrets / "connection.env").write_text("SSH_HOST='h'\nSSH_PORT='22'   # custom port\nSSH_PASSWORD='it'\\''s'\n")
     (root / "library" / "lessons").mkdir(parents=True)
     (root / "library" / "lessons" / "our_host_quirk.md").write_text("# learned the hard way")
-    shipped = subprocess.run(["git", "-C", str(REPO), "show", "29eba5a:library/lessons/caching_by_host.md"],
-                             capture_output=True, check=True).stdout
+    shipped = (REPO / "tests" / "fixtures" / "v1_caching_by_host.md").read_bytes()  # byte-identical to v1
     (root / "library" / "lessons" / "caching_by_host.md").write_bytes(shipped)
     (root / "projects" / "acme" / "wp.sh").write_text("")
     (root / "projects" / "acme" / "backups").mkdir()
