@@ -216,25 +216,25 @@ def _simple_commands(command: str) -> Optional[List[List[str]]]:
     commands: List[List[str]] = [[]]
     index = 0
     while index < len(tokens):
-        token = tokens[index]
-        nxt = tokens[index + 1] if index + 1 < len(tokens) else None
-        if token.isdigit() and nxt in (">", ">>", ">&", "<"):
-            index += 1  # a file-descriptor number before a redirection
+        kind, token = tokens[index]
+        nxt_kind, nxt = tokens[index + 1] if index + 1 < len(tokens) else (None, None)
+        if kind == shellwords.FD:
+            index += 1  # a file-descriptor number touching a redirection (2>/dev/null)
             continue
-        if not shellwords.is_operator(token):
+        if kind == shellwords.WORD:
             commands[-1].append(token)
         elif token in shellwords.SEPARATORS:
             commands.append([])
         elif token in (">", ">>", "&>", "&>>"):
-            if nxt != "/dev/null":
+            if nxt_kind != shellwords.WORD or nxt != "/dev/null":
                 return None
             index += 1
         elif token == ">&":
-            if nxt not in ("1", "2"):
+            if nxt_kind != shellwords.WORD or nxt not in ("1", "2"):
                 return None
             index += 1
         elif token == "<":
-            if nxt is None or shellwords.is_operator(nxt):
+            if nxt_kind != shellwords.WORD:
                 return None
             index += 1
         else:

@@ -45,6 +45,7 @@ def test_changing_commands_need_a_backup(args):
     "find wp-content/uploads -name '*.php' -newer wp-config.php", "md5sum index.php",
     "wp plugin list && wp theme list", "cd wp-content && ls", "php -v", "tar -tf file.tar",
     "du -sh wp-content/uploads 2>/dev/null", "head -20 wp-config.php", "crontab -l",
+    "grep -E 'a|b' x", "ls \"a;b\"", "grep ';' wp-content/x.php", "ls wp-content 2>&1",
 ])
 def test_read_only_shell(command):
     assert guard.shell_is_read_only(command) is True
@@ -62,6 +63,9 @@ def test_read_only_shell(command):
     "find . -maxdepth 1 -name keepme.txt $'-delete'", "find . {-delete,}", "find . $\"-delete\"",
     "wp option get home $'--exec=update_option(1,2);'", "ls wp-content/*.php", "ls ~", "file -mC x",
     "cat wp-config.php | rev", "grep AUTH_KEY wp-config.php | tr a-z A-Z", "od -c wp-config.php",
+    # Review round 3: quoted operators and CR must not split a command.
+    "find ';' cat . -delete", "find '|' ls . -delete", "find \rcat . -delete", "find ';' cat . -exec rm '{}' +",
+    "gzip -l ';' cat -d x.gz", "find '|' cat wp-config.php -exec rev '{}' +", "crontab 5 >/dev/null -l",
     "rm -rf wp-content/cache", "mv a b", "echo x > index.php", "cat a >> b", "find . -name x -delete",
     "find . -exec rm {} +", "sed -i s/a/b/ wp-config.php", "wp option update a b", "chmod 777 x",
     "ls $(rm -rf /)", "ls `id`", "php -r 'unlink(\"x\");'", "php script.php", "tar -xf x.tar",

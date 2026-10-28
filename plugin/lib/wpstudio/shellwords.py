@@ -11,7 +11,7 @@ that matter for safety:
 from __future__ import annotations
 
 import shlex
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 OPERATOR_CHARS = set(";&|<>()")
 SEPARATORS = {";", "&&", "||", "|", "&"}
@@ -35,20 +35,39 @@ def is_operator(token: str) -> bool:
 UNQUOTED_SPECIAL = set("$`\\{}*?[]!")
 WORD_START_SPECIAL = set("~#")
 
+# Token kinds from literal_words(). Only OP tokens separate or redirect: a quoted ';' is a WORD.
+OP, WORD, FD = "op", "word", "fd"
 
-def literal_words(command: str) -> Optional[List[str]]:
-    """Words and operators, or None unless every word is literal text.
+
+def literal_words(command: str) -> Optional[List[Tuple[str, str]]]:
+    """(kind, text) tokens, or None unless every word is literal text.
 
     Stricter than tokenize(), for deciding that a command only reads: the remote shell would expand
     `$'…'`, `$(…)`, `${…}`, `{a,b}`, globs, `~` and backslash escapes into text nobody checked (a
     `$'-delete'` becomes `-delete`), so any of those outside single quotes means "can't judge".
     Single-quoted text is literal; double-quoted text is literal unless it holds `$`, a backtick or
-    a backslash.
+    a backslash. Tokens are typed so quoted text can never pass for an operator, and a number
+    counts as a file descriptor only when it touches the redirection (`2>`), as in the shell. A
+    carriage return is ordinary text to the shell but a line break to people reading the command,
+    so it means "can't judge" too.
     """
-    tokens: List[str] = []
+    if "\r" in command:
+        return None
+    tokens: List[Tuple[str, str]] = []
     word: Optional[List[str]] = None
+    quoted = False
     index = 0
-    text = command.replace("\r", "\n")
+    text = command
+
+    def finish():
+        nonlocal word, quoted
+        if word is not None:
+            joined = "".join(word)
+            touching = index < len(text) and text[index] in "<>"
+            kind = FD if (not quoted and joined.isdigit() and touching) else WORD
+            tokens.append((kind, joined))
+        word, quoted = None, False
+
     while index < len(text):
         char = text[index]
         if char == "'":
@@ -56,6 +75,7 @@ def literal_words(command: str) -> Optional[List[str]]:
             if end < 0:
                 return None
             word = (word or []) + list(text[index + 1:end])
+            quoted = True
             index = end + 1
             continue
         if char == '"':
@@ -66,26 +86,24 @@ def literal_words(command: str) -> Optional[List[str]]:
             if set(inner) & set("$`\\"):
                 return None
             word = (word or []) + list(inner)
+            quoted = True
             index = end + 1
             continue
-        if char in " \t" or char == "\n" or char in OPERATOR_CHARS:
-            if word is not None:
-                tokens.append("".join(word))
-                word = None
+        if char in " \t\n" or char in OPERATOR_CHARS:
+            finish()
             if char == "\n":
-                tokens.append(";")
+                tokens.append((OP, ";"))
             elif char in OPERATOR_CHARS:
                 op = char
                 while index + 1 < len(text) and text[index + 1] in OPERATOR_CHARS:
                     index += 1
                     op += text[index]
-                tokens.append(op)
+                tokens.append((OP, op))
             index += 1
             continue
         if char in UNQUOTED_SPECIAL or (word is None and char in WORD_START_SPECIAL):
             return None
         word = (word or []) + [char]
         index += 1
-    if word is not None:
-        tokens.append("".join(word))
+    finish()
     return tokens
