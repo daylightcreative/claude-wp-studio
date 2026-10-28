@@ -123,8 +123,14 @@ def test_server_side_lint_stops_broken_php_with_no_local_php(ws, tmp_path):
     run, root, _ = ws
     bad = tmp_path / "bad.php"
     bad.write_text("<?php\nfunction broken( {\n")
-    no_php = "/usr/bin:/bin:/usr/sbin:/sbin"   # no Homebrew php on this PATH
-    result = run("deploy", "e2e", str(bad), "wp-content/mu-plugins/e2e-bad.php", path=no_php)
+    # A PATH holding only the tools wpsite needs, and no php, wherever php lives on this machine.
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    for name in ("ssh", "ssh-keygen", "curl"):
+        found = shutil.which(name)
+        assert found, "%s is needed for this test" % name
+        (tools / name).symlink_to(found)
+    result = run("deploy", "e2e", str(bad), "wp-content/mu-plugins/e2e-bad.php", path=str(tools))
     assert result.returncode == 3 and "the server's PHP found a syntax error" in result.stderr
     assert run("sh", "e2e", "ls -a wp-content/mu-plugins").stdout.count("e2e-bad") == 0
     assert page().count("<html") == 1

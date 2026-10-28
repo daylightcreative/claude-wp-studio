@@ -766,6 +766,9 @@ def cmd_key(args, root: Path) -> int:
         return 0
     if site.values.get("SSH_PASSWORD"):
         remote.close_master(site)
+        # ssh-copy-id needs ~/.ssh to exist (it stages files there); a Mac that has never used SSH has none.
+        ssh_dir = Path.home() / ".ssh"
+        ssh_dir.mkdir(mode=0o700, exist_ok=True)
         copy = subprocess.run(
             # -f: install without first trying to log in with the key (that probe offers the agent's keys and
             # can use up the server's login attempts); the password options mirror remote._auth_options.
@@ -788,7 +791,13 @@ def cmd_key(args, root: Path) -> int:
                     return 0
             except remote.RemoteError:
                 pass
-    say("The key couldn't be installed automatically (many managed hosts manage keys in their dashboard).")
+    reason = ""
+    if site.values.get("SSH_PASSWORD"):
+        lines = (copy.stderr or copy.stdout or "").strip().splitlines()
+        if lines:
+            reason = redact.redact_text(lines[-1], remote.secret_literals(site, fetch=False))
+    say("The key couldn't be installed automatically (many managed hosts manage keys in their dashboard)%s."
+        % ((": " + reason) if reason else ""))
     say("Ask the operator to add this public key in the hosting dashboard (it is safe to share):")
     say("  " + public)
     say("Where: MyKinsta → User settings → SSH keys; cPanel → SSH Access → Import Key; otherwise the host's SSH/SFTP settings.")
