@@ -41,6 +41,17 @@ These hold whatever Claude decides. Each is covered by the test suite:
   across it. A search of your whole home folder could; that is a classifier matter too.
 - The drop box is inside the studio folder while it holds something. Tell Claude as soon as
   you've filled it, so it gets filed and cleared.
+- Masking stops secrets from *slipping* into the conversation. It can't stop a deliberate attempt
+  by something that can run code on the server: `wp eval` can print the database password
+  reversed, and anyone with SSH access to a host can read `wp-config.php`. `wpsite` refuses the
+  easy forms (a `wpsite sh` command that would print `wp-config.php` transformed). The rest falls
+  to the auto-mode classifier, which is built to stop sensitive data being sent out. That
+  matters when Claude reads untrusted text, such as a hacked site's pages, that might try to
+  instruct it.
+- The checks fail closed, so some harmless commands are refused or need a backup:
+  - any `wp db query`, even a SELECT;
+  - an unquoted `*` or `$` in `wpsite sh`;
+  - a lowercase `ssh` anywhere in a shell command, commit messages included.
 - The backup rule needs a backup that is *fresh*. It doesn't check that the backup covers the
   specific change, and it doesn't restore anything for you.
 
